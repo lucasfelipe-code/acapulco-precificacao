@@ -27,13 +27,14 @@ api.interceptors.response.use(
 
 // ─── Auth ─────────────────────────────────────────────────────────────────
 export const authAPI = {
-  login: (email, password) => api.post('/auth/login', { email, password }),
-  me: () => api.get('/auth/me'),
-  changePassword: (data) => api.post('/auth/change-password', data),
+  login:          (email, password) => api.post('/auth/login', { email, password }),
+  me:             ()                => api.get('/auth/me'),
+  changePassword: (data)            => api.post('/auth/change-password', data),
+  updateProfile:  (data)            => api.put('/auth/profile', data),
+  updateAvatar:   (avatarBase64)    => api.put('/auth/avatar', { avatarBase64 }),
 };
 
 // ─── Products / ERP ───────────────────────────────────────────────────────
-// Retorna: { product, materials (BOM com staleness por linha), markup, combinacoes }
 export const productsAPI = {
   list:             ()                          => api.get('/products'),
   getByReference:   (ref, forceRefresh = false) =>
@@ -66,7 +67,7 @@ export const approvalsAPI = {
 export const costsAPI = {
   list:    ()         => api.get('/costs'),
   grouped: ()         => api.get('/costs/grouped'),
-  lookup:  (body)     => api.post('/costs/lookup', body),  // resolve custos automáticos por tipo+qtd
+  lookup:  (body)     => api.post('/costs/lookup', body),
   get:     (id)       => api.get(`/costs/${id}`),
   create:  (data)     => api.post('/costs', data),
   update:  (id, data) => api.put(`/costs/${id}`, data),
@@ -75,11 +76,8 @@ export const costsAPI = {
 
 // ─── Materials (catálogo ERP + IA) ────────────────────────────────────────────
 export const materialsAPI = {
-  // Busca textual simples no catálogo ERP (cache 4h)
   search:    (q)           => api.get('/materials/search', { params: { q } }),
-  // IA sugere melhor match + até 10 similares (≥80%)
   aiSuggest: (description) => api.post('/materials/ai-suggest', { description }),
-  // Força recarga do catálogo (admin)
   refresh:   ()            => api.post('/materials/catalog/refresh'),
 };
 
@@ -87,16 +85,27 @@ export const materialsAPI = {
 export const clientsAPI = {
   search: (q = '') => api.get('/clients', { params: q ? { q } : {} }),
   get:    (id)     => api.get(`/clients/${id}`),
+  create: (data)   => api.post('/clients', data),
+  update: (id, data) => api.put(`/clients/${id}`, data),
+};
+
+// ─── CRM / Pipeline ───────────────────────────────────────────────────────────
+export const crmAPI = {
+  pipeline:      ()          => api.get('/crm/pipeline'),
+  moveStage:     (id, stage) => api.patch(`/crm/${id}/stage`, { stage }),
+  notifications: ()          => api.get('/crm/notifications'),
+  readAll:       ()          => api.patch('/crm/notifications/read-all'),
+  readOne:       (nid)       => api.patch(`/crm/notifications/${nid}/read`),
 };
 
 // ─── Users (admin) ────────────────────────────────────────────────────────
 export const usersAPI = {
-  list:          ()            => api.get('/users'),
-  sellers:       ()            => api.get('/users/sellers'),
-  create:        (data)        => api.post('/users', data),
-  update:        (id, data)    => api.put(`/users/${id}`, data),
-  deactivate:    (id)          => api.delete(`/users/${id}`),
-  resetPassword: (id, newPassword) => api.post(`/users/${id}/reset-password`, { newPassword }),
+  list:          ()                    => api.get('/users'),
+  sellers:       ()                    => api.get('/users/sellers'),
+  create:        (data)                => api.post('/users', data),
+  update:        (id, data)            => api.put(`/users/${id}`, data),
+  deactivate:    (id)                  => api.delete(`/users/${id}`),
+  resetPassword: (id, newPassword)     => api.post(`/users/${id}/reset-password`, { newPassword }),
 };
 
 // ─── Preços / Comprador ───────────────────────────────────────────────────
@@ -110,21 +119,18 @@ export const pricesAPI = {
 
 // ─── Embroidery ───────────────────────────────────────────────────────────
 export const embroideryAPI = {
-  // Análise de imagem via GPT-4o Vision — retorna estimativa de pontos + bordados similares
-  analyze:       (formData) => api.post('/embroidery/analyze', formData, {
+  analyze:        (formData)         => api.post('/embroidery/analyze', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 60000,
   }),
-  calculate:     (points, pricePerK) => api.post('/embroidery/calculate', { points, pricePerK }),
-  calculatePrint: (data)             => api.post('/embroidery/print-calculate', data),
-
-  // Biblioteca de bordados anteriores
-  library:       (params)    => api.get('/embroidery/library', { params }),
-  libraryGet:    (id)        => api.get(`/embroidery/library/${id}`),
-  libraryCreate: (formData)  => api.post('/embroidery/library', formData, {
+  calculate:      (points, pricePerK) => api.post('/embroidery/calculate', { points, pricePerK }),
+  calculatePrint: (data)              => api.post('/embroidery/print-calculate', data),
+  library:        (params)            => api.get('/embroidery/library', { params }),
+  libraryGet:     (id)                => api.get(`/embroidery/library/${id}`),
+  libraryCreate:  (formData)          => api.post('/embroidery/library', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   }),
-  libraryUpdate: (id, data)  => api.put(`/embroidery/library/${id}`, data),
+  libraryUpdate:  (id, data)          => api.put(`/embroidery/library/${id}`, data),
 };
 
 export default api;

@@ -66,4 +66,43 @@ router.post('/change-password', requireAuth, async (req, res, next) => {
   }
 });
 
+// PUT /api/auth/profile — atualiza dados do próprio perfil
+router.put('/profile', requireAuth, async (req, res, next) => {
+  try {
+    const { name, email, phone } = req.body;
+    const data = {};
+    if (name?.trim())  data.name  = name.trim();
+    if (email?.trim()) data.email = email.trim();
+    if (phone !== undefined) data.phone = phone || null;
+
+    if (email) {
+      const exists = await prisma.user.findFirst({ where: { email, NOT: { id: req.user.id } } });
+      if (exists) return res.status(409).json({ error: 'E-mail já em uso por outro usuário' });
+    }
+
+    const user = await prisma.user.update({
+      where: { id: req.user.id },
+      data,
+      select: { id: true, email: true, name: true, role: true, phone: true, avatarUrl: true },
+    });
+    res.json({ user });
+  } catch (err) { next(err); }
+});
+
+// PUT /api/auth/avatar — atualiza avatar (base64 pequeno, max 200KB)
+router.put('/avatar', requireAuth, async (req, res, next) => {
+  try {
+    const { avatarBase64 } = req.body;
+    if (!avatarBase64) return res.status(400).json({ error: 'avatarBase64 é obrigatório' });
+    if (avatarBase64.length > 280000) return res.status(400).json({ error: 'Imagem muito grande. Máx 200KB.' });
+
+    const user = await prisma.user.update({
+      where: { id: req.user.id },
+      data:  { avatarUrl: avatarBase64 },
+      select: { id: true, avatarUrl: true },
+    });
+    res.json({ user });
+  } catch (err) { next(err); }
+});
+
 export default router;

@@ -19,6 +19,8 @@ model User {
   password  String
   role      Role     @default(COMMERCIAL)
   active    Boolean  @default(true)
+  phone     String?
+  avatarUrl String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -26,6 +28,8 @@ model User {
   approvalsDone     QuoteApproval[]
   embroideries      EmbroideryJob[]
   priceOverrides    MaterialPriceOverride[]
+  manualClients     ManualClient[]
+  notifications     Notification[]
 
   @@map("users")
 }
@@ -45,10 +49,18 @@ model Quote {
   number      String      @unique // ex: ORC-2026-0001
   status      QuoteStatus @default(DRAFT)
 
-  // Cliente (dados do ERP copiados no momento do orçamento)
+  // Cliente — pode vir do ERP ou ser cadastrado manualmente no Supabase
+  manualClientId Int?
+  manualClient   ManualClient? @relation(fields: [manualClientId], references: [id])
   clientName    String
   clientSegment String?
   clientCnpj    String?
+  clientPhone   String?
+  clientEmail   String?
+
+  // CRM pipeline
+  pipelineStage     String   @default("BUDGET_GENERATED")
+  pipelineUpdatedAt DateTime?
 
   // Produto (dados do ERP capturados no momento do orçamento)
   reference     String   // código ERP
@@ -202,6 +214,44 @@ model ManufacturingCost {
   quoteItems  QuoteFabrication[]
 
   @@map("manufacturing_costs")
+}
+
+// ─── Clientes Manuais (fallback quando não existe no ERP) ────────────────────
+
+model ManualClient {
+  id        Int      @id @default(autoincrement())
+  name      String
+  cnpj      String?
+  email     String?
+  phone     String?
+  segment   String?
+  notes     String?
+  active    Boolean  @default(true)
+
+  createdBy Int
+  user      User     @relation(fields: [createdBy], references: [id])
+  quotes    Quote[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("manual_clients")
+}
+
+// ─── Notificações ─────────────────────────────────────────────────────────────
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+  type      String   // QUOTE_APPROVED | QUOTE_REJECTED | QUOTE_REVISION
+  title     String
+  message   String
+  read      Boolean  @default(false)
+  quoteId   Int?
+  createdAt DateTime @default(now())
+
+  @@map("notifications")
 }
 
 // ─── Overrides de Preço de Matéria-Prima (Comprador) ─────────────────────────

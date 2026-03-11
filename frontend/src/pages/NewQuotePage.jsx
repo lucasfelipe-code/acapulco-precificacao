@@ -23,10 +23,12 @@ export default function NewQuotePage() {
   const [saving, setSaving] = useState(false);
   const [formData, setFormData] = useState({
     // Step 1 — dados do pedido
-    clientId:       null,
+    manualClientId: null,
     clientName:     '',
     clientSegment:  '',
     clientCnpj:     null,
+    clientPhone:    null,
+    clientEmail:    null,
     reference:      '',
     productName:    '',
     itemType:       '',
@@ -60,8 +62,8 @@ export default function NewQuotePage() {
     printCostPerPiece:   0,
 
     // Step 4 — precificação
-    markup:        65,
-    discount:      0,
+    markup:   65,
+    discount: 0,
 
     notes: '',
   });
@@ -102,13 +104,11 @@ export default function NewQuotePage() {
 
   return (
     <div className="max-w-3xl mx-auto">
-      {/* Header */}
       <div className="mb-6">
         <h1 className="text-xl font-bold text-gray-900">Novo Orçamento</h1>
         <p className="text-sm text-gray-500 mt-0.5">Preencha as informações em {STEPS.length} etapas</p>
       </div>
 
-      {/* Step indicator */}
       <div className="flex items-center mb-8">
         {STEPS.map((s, i) => (
           <div key={s.id} className="flex items-center flex-1 last:flex-none">
@@ -138,7 +138,6 @@ export default function NewQuotePage() {
         ))}
       </div>
 
-      {/* Step content */}
       <div className="card p-6">
         {step === 1 && <Step1OrderData {...stepProps} />}
         {step === 2 && <Step2Materials {...stepProps} />}

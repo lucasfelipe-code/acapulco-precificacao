@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Search, AlertTriangle, CheckCircle, RefreshCw, Zap,
-  ChevronDown, X, Building2,
+  ChevronDown, X, Building2, UserPlus, Globe, Database,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { productsAPI, clientsAPI } from '../../../services/api';
@@ -9,12 +9,11 @@ import { productsAPI, clientsAPI } from '../../../services/api';
 const SEGMENTS = ['Saúde', 'Indústria', 'Corporativo', 'Educação', 'Gastronomia', 'Segurança', 'Outro'];
 const ORDER_TYPES = [{ value: 'RETAIL', label: 'Varejo' }, { value: 'WHOLESALE', label: 'Atacado' }];
 
-// ─── Combobox genérico ───────────────────────────────────────────────────────
+// Combobox genérico
 function Combobox({ items, value, onInput, onSelect, onClear, placeholder, loading, renderItem, noResultsMsg, footer }) {
-  const [open, setOpen]           = useState(false);
-  const [highlighted, setHl]      = useState(0);
-  const containerRef              = useRef(null);
-  const inputRef                  = useRef(null);
+  const [open, setOpen]      = useState(false);
+  const [highlighted, setHl] = useState(0);
+  const containerRef         = useRef(null);
 
   useEffect(() => {
     const handler = (e) => {
@@ -38,7 +37,6 @@ function Combobox({ items, value, onInput, onSelect, onClear, placeholder, loadi
     <div ref={containerRef} className="relative">
       <div className="relative flex items-center">
         <input
-          ref={inputRef}
           type="text"
           className="input pr-8"
           value={value}
@@ -87,21 +85,88 @@ function Combobox({ items, value, onInput, onSelect, onClear, placeholder, loadi
   );
 }
 
-// ─── ClientSection ───────────────────────────────────────────────────────────
+// Modal Cadastrar Cliente Manual
+function ManualClientModal({ initialName, onClose, onSaved }) {
+  const [form, setForm] = useState({ name: initialName || '', cnpj: '', email: '', phone: '', segment: '' });
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!form.name.trim()) { toast.error('Nome é obrigatório'); return; }
+    setSaving(true);
+    try {
+      const { data } = await clientsAPI.create(form);
+      toast.success('Cliente cadastrado!');
+      onSaved(data);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Erro ao cadastrar cliente');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <h3 className="font-semibold text-gray-900">Cadastrar Cliente Manualmente</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div>
+            <label className="label">Nome *</label>
+            <input className="input" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Razão social ou nome" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">CNPJ / CPF</label>
+              <input className="input" value={form.cnpj} onChange={e => setForm(f => ({ ...f, cnpj: e.target.value }))} placeholder="00.000.000/0001-00" />
+            </div>
+            <div>
+              <label className="label">Segmento</label>
+              <select className="input" value={form.segment} onChange={e => setForm(f => ({ ...f, segment: e.target.value }))}>
+                <option value="">Selecione...</option>
+                {SEGMENTS.map(s => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">E-mail</label>
+              <input type="email" className="input" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} />
+            </div>
+            <div>
+              <label className="label">Telefone</label>
+              <input className="input" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="(00) 00000-0000" />
+            </div>
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} className="btn-secondary">Cancelar</button>
+            <button type="submit" disabled={saving} className="btn-primary">
+              {saving ? 'Salvando...' : 'Cadastrar'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ClientSection
 function ClientSection({ data, update }) {
   const [query, setQuery]         = useState(data.clientName || '');
   const [results, setResults]     = useState([]);
   const [searching, setSearching] = useState(false);
+  const [showModal, setShowModal] = useState(false);
   const debounceRef               = useRef(null);
 
-  // Debounce search
   useEffect(() => {
     clearTimeout(debounceRef.current);
     if (query.length < 2) { setResults([]); setSearching(false); return; }
     setSearching(true);
     debounceRef.current = setTimeout(() => {
       clientsAPI.search(query)
-        .then(({ data: list }) => setResults(list))
+        .then(({ data: list }) => setResults(Array.isArray(list) ? list : []))
         .catch(() => setResults([]))
         .finally(() => setSearching(false));
     }, 300);
@@ -111,16 +176,37 @@ function ClientSection({ data, update }) {
   const selectClient = (client) => {
     setQuery(client.name);
     update({
-      clientName:    client.name,
-      clientSegment: client.segment || data.clientSegment,
-      clientCnpj:    client.cnpj   || null,
+      clientName:     client.name,
+      clientSegment:  client.segment || data.clientSegment,
+      clientCnpj:     client.cnpj   || null,
+      clientPhone:    client.phone   || null,
+      clientEmail:    client.email   || null,
+      manualClientId: client.source === 'LOCAL' ? parseInt(String(client.id).replace('local-', '')) : null,
     });
   };
 
   const clearClient = () => {
     setQuery('');
-    update({ clientName: '', clientSegment: '', clientCnpj: null });
+    update({ clientName: '', clientSegment: '', clientCnpj: null, clientPhone: null, clientEmail: null, manualClientId: null });
   };
+
+  const handleManualSaved = (savedClient) => {
+    setShowModal(false);
+    const c = savedClient.client || savedClient;
+    selectClient({
+      id:      `local-${c.id}`,
+      name:    c.name,
+      cnpj:    c.cnpj,
+      email:   c.email,
+      phone:   c.phone,
+      segment: c.segment,
+      source:  'LOCAL',
+    });
+    setQuery(c.name);
+  };
+
+  const selectedFromERP   = data.clientName && results.some(r => r.name === data.clientName && r.source === 'ERP');
+  const selectedFromLocal = !!data.manualClientId;
 
   return (
     <div className="space-y-3">
@@ -130,27 +216,45 @@ function ClientSection({ data, update }) {
           <Combobox
             items={results}
             value={query}
-            onInput={(v) => { setQuery(v); update({ clientName: v }); }}
+            onInput={(v) => { setQuery(v); update({ clientName: v, manualClientId: null }); }}
             onSelect={selectClient}
             onClear={clearClient}
             placeholder="Busque pelo nome ou CNPJ..."
             loading={searching}
-            noResultsMsg={`"${query}" não encontrado no ERP — continue digitando para usar o nome como está`}
+            noResultsMsg={`"${query}" não encontrado — use o botão abaixo para cadastrar`}
             renderItem={(c) => (
               <div className="flex items-start gap-2">
-                <Building2 className="w-4 h-4 text-gray-400 shrink-0 mt-0.5" />
-                <div>
+                {c.source === 'LOCAL'
+                  ? <Database className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+                  : <Globe className="w-4 h-4 text-gray-400 shrink-0 mt-0.5" />
+                }
+                <div className="flex-1 min-w-0">
                   <p className="font-medium text-gray-800">{c.name}</p>
                   <p className="text-xs text-gray-500">
                     {[c.cnpj, c.segment, c.city].filter(Boolean).join(' · ')}
                   </p>
                 </div>
+                <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${
+                  c.source === 'LOCAL' ? 'bg-blue-50 text-blue-600' : 'bg-gray-100 text-gray-500'
+                }`}>
+                  {c.source === 'LOCAL' ? 'Local' : 'ERP'}
+                </span>
               </div>
             )}
+            footer={query.length >= 2 ? {
+              icon: <UserPlus className="w-4 h-4" />,
+              label: `Cadastrar "${query}" manualmente`,
+              action: () => setShowModal(true),
+            } : null}
           />
-          {data.clientName && results.some(r => r.name === data.clientName) && (
+          {selectedFromERP && (
             <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
               <CheckCircle className="w-3 h-3" /> Cliente encontrado no ERP
+            </p>
+          )}
+          {selectedFromLocal && (
+            <p className="text-xs text-blue-600 mt-1 flex items-center gap-1">
+              <Database className="w-3 h-3" /> Cliente cadastrado localmente
             </p>
           )}
         </div>
@@ -171,11 +275,19 @@ function ClientSection({ data, update }) {
           </div>
         )}
       </div>
+
+      {showModal && (
+        <ManualClientModal
+          initialName={query}
+          onClose={() => setShowModal(false)}
+          onSaved={handleManualSaved}
+        />
+      )}
     </div>
   );
 }
 
-// ─── ProductSection ──────────────────────────────────────────────────────────
+// ProductSection
 function ProductSection({ data, update }) {
   const [allProducts, setAllProducts] = useState([]);
   const [query, setQuery]             = useState(data.reference || '');
@@ -209,18 +321,18 @@ function ProductSection({ data, update }) {
       const { data: res } = await productsAPI.getByReference(code, forceRefresh);
       setSelectedSizes([]);
       update({
-        reference:        code,
-        productName:      res.product?.name,
-        itemType:         res.product?.itemType || '',
-        erpProductData:   res.product,
-        materials:        res.materials        || [],
-        fabricationItems: res.fabricationItems || [],
+        reference:         code,
+        productName:       res.product?.name,
+        itemType:          res.product?.itemType || '',
+        erpProductData:    res.product,
+        materials:         res.materials        || [],
+        fabricationItems:  res.fabricationItems || [],
         erpMarkup:         res.markup,
         markupCoeficiente: res.markup?.coeficiente  ?? null,
         markupSource:      res.markup ? 'ERP' : 'MANUAL',
         erpSalePrice:      res.erpSalePrice,
         hasStale:          res.hasStale,
-        sizes:            [],
+        sizes:             [],
       });
       toast.success(res.hasStale
         ? `Produto carregado — ${res.staleItems?.length} material(is) com preço a revisar`
@@ -260,37 +372,32 @@ function ProductSection({ data, update }) {
     <div className="space-y-3">
       <div>
         <label className="label">Referência do Produto (ERP) *</label>
-        <div>
-          <div>
-            <Combobox
-              items={filtered}
-              value={query}
-              onInput={(v) => { setQuery(v); update({ reference: v, erpProductData: null }); setErpError(null); }}
-              onSelect={selectProduct}
-              onClear={() => { setQuery(''); update({ reference: '', erpProductData: null }); setErpError(null); }}
-              placeholder={loadingList ? 'Carregando catálogo...' : 'Código ou nome do produto'}
-              loading={searching}
-              noResultsMsg={`"${query}" não encontrado no catálogo`}
-              renderItem={(p) => (
-                <div className="flex items-center gap-3">
-                  <span className="font-mono font-bold text-orange-700 text-xs shrink-0">{p.codigo}</span>
-                  <div className="min-w-0">
-                    <p className="font-medium text-gray-800 truncate">{p.descricao}</p>
-                    {p.descricao2 && <p className="text-xs text-gray-500 truncate">{p.descricao2}</p>}
-                  </div>
-                  {p.grupo && <span className="ml-auto shrink-0 text-xs text-gray-400">{p.grupo}</span>}
-                </div>
-              )}
-              footer={query ? {
-                icon: searching ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />,
-                label: searching ? `Buscando "${query}" no ERP...` : `Buscar "${query}" direto no ERP`,
-                action: () => doSearch(query),
-              } : null}
-            />
-          </div>
-        </div>
+        <Combobox
+          items={filtered}
+          value={query}
+          onInput={(v) => { setQuery(v); update({ reference: v, erpProductData: null }); setErpError(null); }}
+          onSelect={selectProduct}
+          onClear={() => { setQuery(''); update({ reference: '', erpProductData: null }); setErpError(null); }}
+          placeholder={loadingList ? 'Carregando catálogo...' : 'Código ou nome do produto'}
+          loading={searching}
+          noResultsMsg={`"${query}" não encontrado no catálogo`}
+          renderItem={(p) => (
+            <div className="flex items-center gap-3">
+              <span className="font-mono font-bold text-orange-700 text-xs shrink-0">{p.codigo}</span>
+              <div className="min-w-0">
+                <p className="font-medium text-gray-800 truncate">{p.descricao}</p>
+                {p.descricao2 && <p className="text-xs text-gray-500 truncate">{p.descricao2}</p>}
+              </div>
+              {p.grupo && <span className="ml-auto shrink-0 text-xs text-gray-400">{p.grupo}</span>}
+            </div>
+          )}
+          footer={query ? {
+            icon: searching ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />,
+            label: searching ? `Buscando "${query}" no ERP...` : `Buscar "${query}" direto no ERP`,
+            action: () => doSearch(query),
+          } : null}
+        />
 
-        {/* ERP feedback */}
         {erpError?.type === 'stale' && (
           <div className="mt-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
             <div className="flex items-start gap-2">
@@ -338,7 +445,6 @@ function ProductSection({ data, update }) {
         )}
       </div>
 
-      {/* Tamanhos vindos do ERP */}
       {erpSizes.length > 0 && (
         <div>
           <label className="label">
@@ -360,7 +466,6 @@ function ProductSection({ data, update }) {
         </div>
       )}
 
-      {/* Se produto carregado mas sem grade ERP */}
       {data.erpProductData && erpSizes.length === 0 && (
         <div>
           <label className="label">Tamanhos <span className="text-xs font-normal text-gray-400 ml-1">(livre — grade não disponível no ERP)</span></label>
@@ -374,7 +479,6 @@ function ProductSection({ data, update }) {
   );
 }
 
-// ─── Step1OrderData ──────────────────────────────────────────────────────────
 export default function Step1OrderData({ data, update, onNext }) {
   const canProceed = data.clientName?.trim() && data.reference && data.quantity >= 1 && data.erpProductData;
 
@@ -385,7 +489,6 @@ export default function Step1OrderData({ data, update, onNext }) {
         <p className="text-sm text-gray-500 mt-0.5">Cliente, produto e quantidades</p>
       </div>
 
-      {/* ─── Cliente ─── */}
       <section className="space-y-1">
         <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Cliente</h3>
         <ClientSection data={data} update={update} />
@@ -393,7 +496,6 @@ export default function Step1OrderData({ data, update, onNext }) {
 
       <hr className="border-gray-100" />
 
-      {/* ─── Produto ─── */}
       <section className="space-y-1">
         <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Produto</h3>
         <ProductSection data={data} update={update} />
@@ -401,7 +503,6 @@ export default function Step1OrderData({ data, update, onNext }) {
 
       <hr className="border-gray-100" />
 
-      {/* ─── Pedido ─── */}
       <section>
         <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Pedido</h3>
         <div className="grid grid-cols-2 gap-4">
@@ -430,7 +531,6 @@ export default function Step1OrderData({ data, update, onNext }) {
         </div>
       </section>
 
-      {/* ─── Navegação ─── */}
       <div className="flex justify-end pt-2">
         <button onClick={onNext} disabled={!canProceed} className="btn-primary">
           Próxima Etapa →

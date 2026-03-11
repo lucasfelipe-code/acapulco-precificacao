@@ -69,9 +69,31 @@ router.post('/:quoteId/decide', requireRole('ADMIN', 'APPROVER'), async (req, re
       }),
       prisma.quote.update({
         where: { id: quoteId },
-        data:  { status: nextStatus },
+        data:  {
+          status: nextStatus,
+          ...(decision === 'APPROVED' && { pipelineStage: 'SEND_QUOTE', pipelineUpdatedAt: new Date() }),
+        },
       }),
     ]);
+
+    // Cria notificação para o criador do orçamento
+    try {
+      const quoteFull = await prisma.quote.findUnique({
+        where: { id: parseInt(quoteId) },
+        select: { createdBy: true, number: true, clientName: true },
+      });
+      if (quoteFull && quoteFull.createdBy !== req.user.id) {
+        await prisma.notification.create({
+          data: {
+            userId:  quoteFull.createdBy,
+            type:    decision === 'APPROVED' ? 'QUOTE_APPROVED' : decision === 'REJECTED' ? 'QUOTE_REJECTED' : 'QUOTE_REVISION',
+            title:   decision === 'APPROVED' ? '✅ Orçamento aprovado!' : decision === 'REJECTED' ? '❌ Orçamento rejeitado' : '🔄 Revisão solicitada',
+            message: `${quoteFull.number} — ${quoteFull.clientName}${notes ? ': ' + notes : ''}`,
+            quoteId: quoteFull.id,
+          },
+        });
+      }
+    } catch { /* não bloqueia se falhar */ }
 
     res.json({ approval, quote: updatedQuote });
   } catch (err) { next(err); }

@@ -12,6 +12,8 @@ import ApprovalsPage   from './pages/ApprovalsPage';
 import CostsPage       from './pages/CostsPage';
 import UsersPage       from './pages/UsersPage';
 import PriceUpdatePage from './pages/PriceUpdatePage';
+import CrmPage         from './pages/CrmPage';
+import ProfilePage     from './pages/ProfilePage';
 import Layout          from './components/layout/Layout';
 
 const queryClient = new QueryClient({
@@ -44,7 +46,6 @@ export default function App() {
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard" element={<DashboardPage />} />
 
-            {/* Vendedor, Supervisor e Administrador podem criar/ver orçamentos */}
             <Route path="quotes" element={
               <ProtectedRoute roles={['COMMERCIAL', 'APPROVER', 'ADMIN']}>
                 <QuotesPage />
@@ -61,33 +62,37 @@ export default function App() {
               </ProtectedRoute>
             } />
 
-            {/* Aprovações — Supervisor e Administrador */}
             <Route path="approvals" element={
               <ProtectedRoute roles={['APPROVER', 'ADMIN']}>
                 <ApprovalsPage />
               </ProtectedRoute>
             } />
 
-            {/* Custos de fabricação — Comprador e Administrador */}
+            <Route path="crm" element={
+              <ProtectedRoute roles={['COMMERCIAL', 'APPROVER', 'ADMIN']}>
+                <CrmPage />
+              </ProtectedRoute>
+            } />
+
             <Route path="costs" element={
               <ProtectedRoute roles={['COMPRADOR', 'ADMIN']}>
                 <CostsPage />
               </ProtectedRoute>
             } />
 
-            {/* Atualização de preços — Comprador e Administrador */}
             <Route path="prices" element={
               <ProtectedRoute roles={['COMPRADOR', 'ADMIN']}>
                 <PriceUpdatePage />
               </ProtectedRoute>
             } />
 
-            {/* Gestão de usuários — somente Administrador */}
             <Route path="users" element={
               <ProtectedRoute roles={['ADMIN']}>
                 <UsersPage />
               </ProtectedRoute>
             } />
+
+            <Route path="profile" element={<ProfilePage />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

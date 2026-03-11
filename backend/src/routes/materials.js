@@ -263,7 +263,8 @@ router.get('/stale-report', async (req, res, next) => {
         const p      = precoMap[m.codigo];
         const dataNF = p?.data && !p.data.startsWith('1899-12-30') ? p.data : null;
         const days   = staleDays(dataNF ? dataNF : null);
-        const stale  = !dataNF || (Date.now() - new Date(dataNF).getTime()) > 15 * 24 * 60 * 60 * 1000;
+        const fabric = isFabricGroup(m.grupo?.descricao || m.grupo || '');
+        const stale  = fabric && (!dataNF || (Date.now() - new Date(dataNF).getTime()) > 15 * 24 * 60 * 60 * 1000);
         const ov     = overrideMap[m.codigo];
 
         return {

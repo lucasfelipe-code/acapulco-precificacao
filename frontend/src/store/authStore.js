@@ -16,6 +16,13 @@ const useAuthStore = create((set, get) => ({
     set({ user: null, token: null });
   },
 
+  setUser: (userOrUpdater) => {
+    const current = get().user;
+    const next = typeof userOrUpdater === 'function' ? userOrUpdater(current) : userOrUpdater;
+    localStorage.setItem('acapulco_user', JSON.stringify(next));
+    set({ user: next });
+  },
+
   isAuthenticated: () => !!get().token,
 
   hasRole: (...roles) => roles.includes(get().user?.role),
