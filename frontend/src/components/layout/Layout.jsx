@@ -5,27 +5,29 @@ import {
 } from 'lucide-react';
 import useAuthStore from '../../store/authStore';
 
+// Valores de role = valores reais do banco (enum Role do Prisma)
+// Labels de exibição definidos em roleLabel abaixo
 const navItems = [
   { to: '/dashboard', label: 'Dashboard',        icon: LayoutDashboard, roles: null },
-  { to: '/quotes',    label: 'Orçamentos',        icon: FileText,        roles: ['VENDEDOR', 'SUPERVISOR', 'ADMINISTRADOR'] },
-  { to: '/approvals', label: 'Aprovações',        icon: CheckCircle,     roles: ['SUPERVISOR', 'ADMINISTRADOR'] },
-  { to: '/prices',    label: 'Atualizar Preços',  icon: DollarSign,      roles: ['COMPRADOR', 'ADMINISTRADOR'] },
-  { to: '/costs',     label: 'Custos Fabricação', icon: Settings,        roles: ['ADMINISTRADOR'] },
-  { to: '/users',     label: 'Usuários',          icon: Users,           roles: ['ADMINISTRADOR'] },
+  { to: '/quotes',    label: 'Orçamentos',        icon: FileText,        roles: ['COMMERCIAL', 'APPROVER', 'ADMIN'] },
+  { to: '/approvals', label: 'Aprovações',        icon: CheckCircle,     roles: ['APPROVER', 'ADMIN'] },
+  { to: '/prices',    label: 'Atualizar Preços',  icon: DollarSign,      roles: ['COMPRADOR', 'ADMIN'] },
+  { to: '/costs',     label: 'Custos Fabricação', icon: Settings,        roles: ['ADMIN'] },
+  { to: '/users',     label: 'Usuários',          icon: Users,           roles: ['ADMIN'] },
 ];
 
 const roleLabel = {
-  ADMINISTRADOR: 'Administrador',
-  VENDEDOR:      'Vendedor',
-  SUPERVISOR:    'Supervisor',
-  COMPRADOR:     'Comprador',
+  ADMIN:      'Administrador',
+  COMMERCIAL: 'Vendedor',
+  APPROVER:   'Supervisor',
+  COMPRADOR:  'Comprador',
 };
 
 const roleBadgeColor = {
-  ADMINISTRADOR: 'bg-red-500',
-  SUPERVISOR:    'bg-blue-500',
-  VENDEDOR:      'bg-green-500',
-  COMPRADOR:     'bg-yellow-500',
+  ADMIN:      'bg-red-500',
+  APPROVER:   'bg-blue-500',
+  COMMERCIAL: 'bg-green-500',
+  COMPRADOR:  'bg-yellow-500',
 };
 
 export default function Layout() {

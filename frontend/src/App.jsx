@@ -46,45 +46,45 @@ export default function App() {
 
             {/* Vendedor, Supervisor e Administrador podem criar/ver orçamentos */}
             <Route path="quotes" element={
-              <ProtectedRoute roles={['VENDEDOR', 'SUPERVISOR', 'ADMINISTRADOR']}>
+              <ProtectedRoute roles={['COMMERCIAL', 'APPROVER', 'ADMIN']}>
                 <QuotesPage />
               </ProtectedRoute>
             } />
             <Route path="quotes/new" element={
-              <ProtectedRoute roles={['VENDEDOR', 'SUPERVISOR', 'ADMINISTRADOR']}>
+              <ProtectedRoute roles={['COMMERCIAL', 'APPROVER', 'ADMIN']}>
                 <NewQuotePage />
               </ProtectedRoute>
             } />
             <Route path="quotes/:id" element={
-              <ProtectedRoute roles={['VENDEDOR', 'SUPERVISOR', 'ADMINISTRADOR']}>
+              <ProtectedRoute roles={['COMMERCIAL', 'APPROVER', 'ADMIN']}>
                 <QuoteDetailPage />
               </ProtectedRoute>
             } />
 
             {/* Aprovações — Supervisor e Administrador */}
             <Route path="approvals" element={
-              <ProtectedRoute roles={['SUPERVISOR', 'ADMINISTRADOR']}>
+              <ProtectedRoute roles={['APPROVER', 'ADMIN']}>
                 <ApprovalsPage />
               </ProtectedRoute>
             } />
 
             {/* Custos de fabricação — Administrador */}
             <Route path="costs" element={
-              <ProtectedRoute roles={['ADMINISTRADOR']}>
+              <ProtectedRoute roles={['ADMIN']}>
                 <CostsPage />
               </ProtectedRoute>
             } />
 
             {/* Atualização de preços — Comprador e Administrador */}
             <Route path="prices" element={
-              <ProtectedRoute roles={['COMPRADOR', 'ADMINISTRADOR']}>
+              <ProtectedRoute roles={['COMPRADOR', 'ADMIN']}>
                 <PriceUpdatePage />
               </ProtectedRoute>
             } />
 
             {/* Gestão de usuários — somente Administrador */}
             <Route path="users" element={
-              <ProtectedRoute roles={['ADMINISTRADOR']}>
+              <ProtectedRoute roles={['ADMIN']}>
                 <UsersPage />
               </ProtectedRoute>
             } />

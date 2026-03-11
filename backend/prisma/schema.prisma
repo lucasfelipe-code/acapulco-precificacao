@@ -17,7 +17,7 @@ model User {
   email     String   @unique
   name      String
   password  String
-  role      Role     @default(VENDEDOR)
+  role      Role     @default(COMMERCIAL)
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -30,10 +30,10 @@ model User {
 }
 
 enum Role {
-  ADMINISTRADOR
-  VENDEDOR
-  SUPERVISOR
-  COMPRADOR
+  ADMIN       // Administrador — acesso total
+  COMMERCIAL  // Vendedor — cria orçamentos, vê apenas os próprios
+  APPROVER    // Supervisor — vê todos os orçamentos, aprova/rejeita
+  COMPRADOR   // Comprador — gestão de preços de matéria-prima
 }
 
 // ─── Clientes ─────────────────────────────────────────────────────────────────

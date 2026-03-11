@@ -8,10 +8,10 @@ import toast from 'react-hot-toast';
 import { usersAPI } from '../services/api';
 
 const ROLES = [
-  { value: 'VENDEDOR',      label: 'Vendedor',      color: 'bg-green-100 text-green-700' },
-  { value: 'SUPERVISOR',    label: 'Supervisor',    color: 'bg-blue-100 text-blue-700' },
+  { value: 'COMMERCIAL',      label: 'Vendedor',      color: 'bg-green-100 text-green-700' },
+  { value: 'APPROVER',    label: 'Supervisor',    color: 'bg-blue-100 text-blue-700' },
   { value: 'COMPRADOR',     label: 'Comprador',     color: 'bg-yellow-100 text-yellow-700' },
-  { value: 'ADMINISTRADOR', label: 'Administrador', color: 'bg-red-100 text-red-700' },
+  { value: 'ADMIN', label: 'Administrador', color: 'bg-red-100 text-red-700' },
 ];
 
 function RoleBadge({ role }) {
@@ -106,10 +106,10 @@ function UserModal({ user, onClose, onSaved }) {
               ))}
             </select>
             <p className="text-xs text-gray-400 mt-1">
-              {form.role === 'VENDEDOR'      && 'Cria orçamentos. Vê apenas os próprios.'}
-              {form.role === 'SUPERVISOR'    && 'Vê todos os orçamentos. Aprova/rejeita.'}
+              {form.role === 'COMMERCIAL'      && 'Cria orçamentos. Vê apenas os próprios.'}
+              {form.role === 'APPROVER'    && 'Vê todos os orçamentos. Aprova/rejeita.'}
               {form.role === 'COMPRADOR'     && 'Gerencia preços de matéria-prima.'}
-              {form.role === 'ADMINISTRADOR' && 'Acesso total ao sistema.'}
+              {form.role === 'ADMIN' && 'Acesso total ao sistema.'}
             </p>
           </div>
 

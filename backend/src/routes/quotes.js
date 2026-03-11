@@ -35,7 +35,7 @@ router.get('/', async (req, res, next) => {
     ];
 
     // COMMERCIAL só vê os próprios; APPROVER/ADMIN vê todos
-    if (req.user.role === 'VENDEDOR') {
+    if (req.user.role === 'COMMERCIAL') {
       where.createdBy = req.user.id;
     }
 
@@ -66,7 +66,7 @@ router.get('/', async (req, res, next) => {
 router.get('/stats/summary', async (req, res, next) => {
   try {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const where = req.user.role === 'VENDEDOR' ? { createdBy: req.user.id } : {};
+    const where = req.user.role === 'COMMERCIAL' ? { createdBy: req.user.id } : {};
 
     const [total, pending, approved, recentValue] = await Promise.all([
       prisma.quote.count({ where }),
@@ -104,7 +104,7 @@ router.get('/:id', async (req, res, next) => {
     if (!quote) return res.status(404).json({ error: 'Orçamento não encontrado' });
 
     // COMMERCIAL só acessa os próprios
-    if (req.user.role === 'VENDEDOR' && quote.createdBy !== req.user.id) {
+    if (req.user.role === 'COMMERCIAL' && quote.createdBy !== req.user.id) {
       return res.status(403).json({ error: 'Acesso negado' });
     }
 
@@ -206,7 +206,7 @@ router.put('/:id', async (req, res, next) => {
     const quote = await prisma.quote.findUnique({ where: { id } });
 
     if (!quote) return res.status(404).json({ error: 'Orçamento não encontrado' });
-    if (req.user.role === 'VENDEDOR' && quote.createdBy !== req.user.id) {
+    if (req.user.role === 'COMMERCIAL' && quote.createdBy !== req.user.id) {
       return res.status(403).json({ error: 'Acesso negado' });
     }
     if (['APPROVED', 'REJECTED'].includes(quote.status)) {
@@ -303,7 +303,7 @@ router.post('/:id/submit', async (req, res, next) => {
     });
 
     if (!quote) return res.status(404).json({ error: 'Orçamento não encontrado' });
-    if (req.user.role === 'VENDEDOR' && quote.createdBy !== req.user.id) {
+    if (req.user.role === 'COMMERCIAL' && quote.createdBy !== req.user.id) {
       return res.status(403).json({ error: 'Acesso negado' });
     }
     if (quote.status !== 'DRAFT' && quote.status !== 'REVISION_REQUESTED') {
@@ -336,7 +336,7 @@ router.post('/:id/submit', async (req, res, next) => {
 
 // ─── POST /api/quotes/:id/confirm-embroidery ──────────────────────────────────
 // Bordador confirma o preço do bordado e o orçamento avança
-router.post('/:id/confirm-embroidery', requireRole('ADMINISTRADOR', 'COMPRADOR'), async (req, res, next) => {
+router.post('/:id/confirm-embroidery', requireRole('ADMIN', 'COMPRADOR'), async (req, res, next) => {
   try {
     const id    = parseInt(req.params.id);
     const { confirmedCost, notes } = req.body;
@@ -375,7 +375,7 @@ router.delete('/:id', async (req, res, next) => {
     const quote = await prisma.quote.findUnique({ where: { id } });
 
     if (!quote) return res.status(404).json({ error: 'Orçamento não encontrado' });
-    if (req.user.role === 'VENDEDOR' && quote.createdBy !== req.user.id) {
+    if (req.user.role === 'COMMERCIAL' && quote.createdBy !== req.user.id) {
       return res.status(403).json({ error: 'Acesso negado' });
     }
     if (quote.status === 'APPROVED') {

@@ -16,9 +16,9 @@ import { requireAuth, requireRole } from '../middleware/auth.js';
 
 const router = Router();
 router.use(requireAuth);
-router.use(requireRole('ADMINISTRADOR'));
+router.use(requireRole('ADMIN'));
 
-const VALID_ROLES = ['ADMINISTRADOR', 'VENDEDOR', 'SUPERVISOR', 'COMPRADOR'];
+const VALID_ROLES = ['ADMIN', 'COMMERCIAL', 'APPROVER', 'COMPRADOR'];
 
 const userSelect = {
   id: true, email: true, name: true, role: true,
