@@ -3,14 +3,16 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'react-hot-toast';
 import useAuthStore from './store/authStore';
 
-import LoginPage from './pages/LoginPage';
-import DashboardPage from './pages/DashboardPage';
-import QuotesPage from './pages/QuotesPage';
-import NewQuotePage from './pages/NewQuotePage';
+import LoginPage       from './pages/LoginPage';
+import DashboardPage   from './pages/DashboardPage';
+import QuotesPage      from './pages/QuotesPage';
+import NewQuotePage    from './pages/NewQuotePage';
 import QuoteDetailPage from './pages/QuoteDetailPage';
-import ApprovalsPage from './pages/ApprovalsPage';
-import CostsPage from './pages/CostsPage';
-import Layout from './components/layout/Layout';
+import ApprovalsPage   from './pages/ApprovalsPage';
+import CostsPage       from './pages/CostsPage';
+import UsersPage       from './pages/UsersPage';
+import PriceUpdatePage from './pages/PriceUpdatePage';
+import Layout          from './components/layout/Layout';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -41,17 +43,49 @@ export default function App() {
           }>
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard" element={<DashboardPage />} />
-            <Route path="quotes" element={<QuotesPage />} />
-            <Route path="quotes/new" element={<NewQuotePage />} />
-            <Route path="quotes/:id" element={<QuoteDetailPage />} />
+
+            {/* Vendedor, Supervisor e Administrador podem criar/ver orçamentos */}
+            <Route path="quotes" element={
+              <ProtectedRoute roles={['VENDEDOR', 'SUPERVISOR', 'ADMINISTRADOR']}>
+                <QuotesPage />
+              </ProtectedRoute>
+            } />
+            <Route path="quotes/new" element={
+              <ProtectedRoute roles={['VENDEDOR', 'SUPERVISOR', 'ADMINISTRADOR']}>
+                <NewQuotePage />
+              </ProtectedRoute>
+            } />
+            <Route path="quotes/:id" element={
+              <ProtectedRoute roles={['VENDEDOR', 'SUPERVISOR', 'ADMINISTRADOR']}>
+                <QuoteDetailPage />
+              </ProtectedRoute>
+            } />
+
+            {/* Aprovações — Supervisor e Administrador */}
             <Route path="approvals" element={
-              <ProtectedRoute roles={['APPROVER', 'ADMIN']}>
+              <ProtectedRoute roles={['SUPERVISOR', 'ADMINISTRADOR']}>
                 <ApprovalsPage />
               </ProtectedRoute>
             } />
+
+            {/* Custos de fabricação — Administrador */}
             <Route path="costs" element={
-              <ProtectedRoute roles={['ADMIN']}>
+              <ProtectedRoute roles={['ADMINISTRADOR']}>
                 <CostsPage />
+              </ProtectedRoute>
+            } />
+
+            {/* Atualização de preços — Comprador e Administrador */}
+            <Route path="prices" element={
+              <ProtectedRoute roles={['COMPRADOR', 'ADMINISTRADOR']}>
+                <PriceUpdatePage />
+              </ProtectedRoute>
+            } />
+
+            {/* Gestão de usuários — somente Administrador */}
+            <Route path="users" element={
+              <ProtectedRoute roles={['ADMINISTRADOR']}>
+                <UsersPage />
               </ProtectedRoute>
             } />
           </Route>
@@ -66,7 +100,7 @@ export default function App() {
           duration: 4000,
           style: { background: '#1f2937', color: '#f9fafb', fontSize: '14px' },
           success: { iconTheme: { primary: '#22c55e', secondary: '#fff' } },
-          error: { iconTheme: { primary: '#ef4444', secondary: '#fff' } },
+          error:   { iconTheme: { primary: '#ef4444', secondary: '#fff' } },
         }}
       />
     </QueryClientProvider>

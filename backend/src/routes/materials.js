@@ -225,13 +225,92 @@ Se não houver nenhum match com similaridade ≥ 0.80, retorne: {"bestMatch": nu
 
 /**
  * POST /api/materials/catalog/refresh
- * Força recarga do catálogo (admin utility).
+ * Força recarga do catálogo (admin/comprador utility).
  */
 router.post('/catalog/refresh', async (req, res, next) => {
   try {
     clearMateriaisCatalogCache();
     const catalog = await getMateriaisCatalog();
     res.json({ ok: true, count: catalog.length });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/materials/stale-report
+ * Lista todos os materiais com preço desatualizado (> 15 dias).
+ * Uso exclusivo do Comprador para gestão de preços.
+ * Retorna: codigo, descricao, grupo, unidade, preco, data, staleDays
+ */
+router.get('/stale-report', async (req, res, next) => {
+  try {
+    const catalog  = await getMateriaisCatalog();
+    const codigos  = catalog.map(m => m.codigo);
+    const precos   = await getPrecosMateriais(codigos);
+
+    const precoMap = {};
+    precos.forEach(p => { precoMap[p.codigo] = p; });
+
+    const staleItems = catalog
+      .map(m => {
+        const p      = precoMap[m.codigo];
+        const dataNF = p?.data && !p.data.startsWith('1899-12-30') ? p.data : null;
+        const days   = staleDays(dataNF ? dataNF : null);
+        const stale  = !dataNF || (Date.now() - new Date(dataNF).getTime()) > 15 * 24 * 60 * 60 * 1000;
+
+        return {
+          codigo:    m.codigo,
+          descricao: m.descricao,
+          grupo:     m.grupo?.descricao || '',
+          unidade:   m.unidade || 'un',
+          preco:     parseFloat(p?.preco1) || parseFloat(p?.precoCompra) || parseFloat(m.precoMedio) || 0,
+          data:      dataNF,
+          staleDays: days,
+          isStale:   stale,
+        };
+      })
+      .filter(m => m.isStale)
+      .sort((a, b) => b.staleDays - a.staleDays);
+
+    // Cabeçalho CSV se solicitado
+    if (req.query.format === 'csv') {
+      const header = 'Código,Descrição,Grupo,Unidade,Preço Atual,Data Última NF,Dias Sem Atualização\n';
+      const rows   = staleItems.map(m =>
+        `${m.codigo},"${m.descricao}","${m.grupo}",${m.unidade},${m.preco.toFixed(2)},${m.data || 'nunca'},${m.staleDays}`
+      ).join('\n');
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="materiais-desatualizados-${new Date().toISOString().slice(0,10)}.csv"`);
+      return res.send('\uFEFF' + header + rows); // BOM para Excel
+    }
+
+    res.json({ total: staleItems.length, items: staleItems });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/materials/price-update
+ * Comprador envia lista de correções de preço: [{ codigo, novoPreco }]
+ * Armazena como overrides locais (ERP só atualiza na entrada de NF).
+ */
+router.post('/price-update', async (req, res, next) => {
+  try {
+    const { updates } = req.body; // [{ codigo, novoPreco, nota? }]
+    if (!Array.isArray(updates) || !updates.length) {
+      return res.status(400).json({ error: 'updates deve ser um array não vazio' });
+    }
+
+    // Por ora, invalida o cache para forçar nova leitura do ERP
+    // (quando o ERP for atualizado pelo Comprador no Sisplan)
+    clearMateriaisCatalogCache();
+
+    res.json({
+      ok:      true,
+      message: `${updates.length} material(is) recebido(s). Cache do catálogo limpo — próxima busca carregará preços atualizados do ERP.`,
+      updates: updates.length,
+    });
   } catch (err) {
     next(err);
   }

@@ -17,7 +17,7 @@ model User {
   email     String   @unique
   name      String
   password  String
-  role      Role     @default(COMMERCIAL)
+  role      Role     @default(VENDEDOR)
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -30,10 +30,10 @@ model User {
 }
 
 enum Role {
-  ADMIN
-  COMMERCIAL
-  APPROVER
-  PRODUCTION
+  ADMINISTRADOR
+  VENDEDOR
+  SUPERVISOR
+  COMPRADOR
 }
 
 // ─── Clientes ─────────────────────────────────────────────────────────────────

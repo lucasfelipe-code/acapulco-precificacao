@@ -1,22 +1,31 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, FileText, CheckCircle, Settings,
-  LogOut, ChevronRight, Scissors, User
+  LogOut, Scissors, User, Users, DollarSign,
 } from 'lucide-react';
 import useAuthStore from '../../store/authStore';
 
 const navItems = [
-  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: null },
-  { to: '/quotes', label: 'Orçamentos', icon: FileText, roles: null },
-  { to: '/approvals', label: 'Aprovações', icon: CheckCircle, roles: ['APPROVER', 'ADMIN'] },
-  { to: '/costs', label: 'Custos de Fabricação', icon: Settings, roles: ['ADMIN'] },
+  { to: '/dashboard', label: 'Dashboard',        icon: LayoutDashboard, roles: null },
+  { to: '/quotes',    label: 'Orçamentos',        icon: FileText,        roles: ['VENDEDOR', 'SUPERVISOR', 'ADMINISTRADOR'] },
+  { to: '/approvals', label: 'Aprovações',        icon: CheckCircle,     roles: ['SUPERVISOR', 'ADMINISTRADOR'] },
+  { to: '/prices',    label: 'Atualizar Preços',  icon: DollarSign,      roles: ['COMPRADOR', 'ADMINISTRADOR'] },
+  { to: '/costs',     label: 'Custos Fabricação', icon: Settings,        roles: ['ADMINISTRADOR'] },
+  { to: '/users',     label: 'Usuários',          icon: Users,           roles: ['ADMINISTRADOR'] },
 ];
 
 const roleLabel = {
-  ADMIN: 'Administrador',
-  COMMERCIAL: 'Comercial',
-  APPROVER: 'Aprovador',
-  PRODUCTION: 'Produção',
+  ADMINISTRADOR: 'Administrador',
+  VENDEDOR:      'Vendedor',
+  SUPERVISOR:    'Supervisor',
+  COMPRADOR:     'Comprador',
+};
+
+const roleBadgeColor = {
+  ADMINISTRADOR: 'bg-red-500',
+  SUPERVISOR:    'bg-blue-500',
+  VENDEDOR:      'bg-green-500',
+  COMPRADOR:     'bg-yellow-500',
 };
 
 export default function Layout() {
@@ -70,12 +79,14 @@ export default function Layout() {
         {/* User */}
         <div className="px-3 py-4 border-t border-gray-700">
           <div className="flex items-center gap-3 px-3 py-2 mb-1">
-            <div className="w-7 h-7 bg-gray-600 rounded-full flex items-center justify-center">
+            <div className="w-7 h-7 bg-gray-600 rounded-full flex items-center justify-center shrink-0">
               <User className="w-4 h-4 text-gray-300" />
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-white truncate">{user?.name}</p>
-              <p className="text-xs text-gray-400">{roleLabel[user?.role] || user?.role}</p>
+              <span className={`inline-block text-xs text-white px-1.5 py-0.5 rounded mt-0.5 ${roleBadgeColor[user?.role] || 'bg-gray-500'}`}>
+                {roleLabel[user?.role] || user?.role}
+              </span>
             </div>
           </div>
           <button

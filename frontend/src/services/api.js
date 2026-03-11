@@ -91,6 +91,23 @@ export const clientsAPI = {
   update: (id, data) => api.put(`/clients/${id}`, data),
 };
 
+// ─── Users (admin) ────────────────────────────────────────────────────────
+export const usersAPI = {
+  list:          ()            => api.get('/users'),
+  create:        (data)        => api.post('/users', data),
+  update:        (id, data)    => api.put(`/users/${id}`, data),
+  deactivate:    (id)          => api.delete(`/users/${id}`),
+  resetPassword: (id, newPassword) => api.post(`/users/${id}/reset-password`, { newPassword }),
+};
+
+// ─── Preços / Comprador ───────────────────────────────────────────────────
+export const pricesAPI = {
+  staleReport:  (format) => api.get('/materials/stale-report', { params: format ? { format } : {} }),
+  staleCSV:     ()       => api.get('/materials/stale-report', { params: { format: 'csv' }, responseType: 'blob' }),
+  priceUpdate:  (updates) => api.post('/materials/price-update', { updates }),
+  refreshCache: ()        => api.post('/materials/catalog/refresh'),
+};
+
 // ─── Embroidery ───────────────────────────────────────────────────────────
 export const embroideryAPI = {
   // Análise de imagem via GPT-4o Vision — retorna estimativa de pontos + bordados similares

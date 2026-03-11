@@ -6,7 +6,7 @@ const router = Router();
 router.use(requireAuth);
 
 // GET /api/approvals/pending
-router.get('/pending', requireRole('ADMIN', 'APPROVER'), async (req, res, next) => {
+router.get('/pending', requireRole('ADMINISTRADOR', 'SUPERVISOR'), async (req, res, next) => {
   try {
     const quotes = await prisma.quote.findMany({
       where:   { status: 'PENDING_APPROVAL' },
@@ -23,7 +23,7 @@ router.get('/pending', requireRole('ADMIN', 'APPROVER'), async (req, res, next) 
 });
 
 // GET /api/approvals/history
-router.get('/history', requireRole('ADMIN', 'APPROVER'), async (req, res, next) => {
+router.get('/history', requireRole('ADMINISTRADOR', 'SUPERVISOR'), async (req, res, next) => {
   try {
     const approvals = await prisma.quoteApproval.findMany({
       orderBy: { createdAt: 'desc' },
@@ -38,7 +38,7 @@ router.get('/history', requireRole('ADMIN', 'APPROVER'), async (req, res, next) 
 });
 
 // POST /api/approvals/:quoteId/decide
-router.post('/:quoteId/decide', requireRole('ADMIN', 'APPROVER'), async (req, res, next) => {
+router.post('/:quoteId/decide', requireRole('ADMINISTRADOR', 'SUPERVISOR'), async (req, res, next) => {
   try {
     const quoteId  = parseInt(req.params.quoteId);
     const { decision, notes } = req.body;
