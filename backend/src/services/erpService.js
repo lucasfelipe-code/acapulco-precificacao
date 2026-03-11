@@ -236,6 +236,26 @@ export async function getPrecoNaTabela(codigoTabela, codigoProduto) {
   return erpGet(`/preco/${codigoTabela}/${codigoProduto}`);
 }
 
+/**
+ * Lista clientes do ERP (tipoEntidade=C).
+ * @param {string} nome   - filtro por nome (opcional)
+ * @param {number} limit  - máximo de resultados (padrão 30)
+ */
+export async function getEntidades(nome = '', limit = 30) {
+  const params = { tipoEntidade: 'C', ativo: 'true', limit };
+  if (nome) params.nome = nome;
+  const data = await erpGet('/entidade', params);
+  return Array.isArray(data) ? data : [];
+}
+
+/**
+ * Retorna dados de um cliente específico pelo código (Sisplan).
+ * GET /entidade/{codigo}
+ */
+export async function getEntidade(codigo) {
+  return erpGet(`/entidade/${codigo}`);
+}
+
 // ─── Delphi null date (1899-12-30) = campo não preenchido no Sisplan ────────
 const DELPHI_NULL_PREFIX = '1899-12-30';
 const FRESHNESS_MS       = 15 * 24 * 60 * 60 * 1000;
