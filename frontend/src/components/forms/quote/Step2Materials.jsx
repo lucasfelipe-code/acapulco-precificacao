@@ -22,9 +22,8 @@ import { materialsAPI } from '../../../services/api';
 
 const FRESHNESS_LIMIT = 15;
 
-// ─── Categoria tecido principal ──────────────────────────────────────────────
-// codigoImpressao "9" = tecido/malha principal no Sisplan
-const FABRIC_CATEGORY = '9';
+// Material é tecido se codigoImpressao==="9" (BOM do ERP) ou isFabric===true (busca/IA)
+const isMaterialFabric = (m) => m.category === '9' || m.isFabric === true;
 
 // ─── Stale badge ─────────────────────────────────────────────────────────────
 function StaleBadge({ mat }) {
@@ -93,7 +92,7 @@ function MaterialRow({ mat, onOverride, onRemove, onRestore }) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-medium text-gray-900 truncate">{mat.name}</span>
-            {mat.category === FABRIC_CATEGORY && (
+            {isMaterialFabric(mat) && (
               <span className="text-xs text-purple-600 bg-purple-100 px-1.5 py-0.5 rounded font-medium">Tecido</span>
             )}
             {mat.addedManually && (
@@ -299,7 +298,8 @@ function AddMaterialPanel({ onAdd, onClose }) {
     onAdd({
       erpCode:       mat.codigo,
       name:          mat.descricao,
-      category:      null, // Sisplan /precomaterial não retorna codigoImpressao
+      category:      null,
+      isFabric:      mat.isFabric || false,
       unit:          mat.unidade || 'un',
       consumption,
       unitPrice:     mat.preco || 0,
@@ -309,6 +309,7 @@ function AddMaterialPanel({ onAdd, onClose }) {
       erpPriceDate:  mat.data ? new Date(mat.data) : null,
       isStale:       mat.isStale,
       staleDays:     mat.staleDays,
+      staleReason:   mat.staleReason || null,
       costPerPiece:  (mat.preco || 0) * consumption,
       addedManually: true,
       addedFromERP:  true,
@@ -416,8 +417,8 @@ export default function Step2Materials({ data, update, onNext, onBack }) {
   // materiais com preço bloqueante (stale sem override)
   const staleBlocking = activeMats.filter((m) => m.isStale && !m.priceOverride);
 
-  // regra: precisa de pelo menos 1 tecido/malha (category === '9')
-  const hasTecido  = activeMats.some((m) => m.category === FABRIC_CATEGORY);
+  // regra: precisa de pelo menos 1 tecido/malha
+  const hasTecido  = activeMats.some(isMaterialFabric);
   const noFabric   = !hasTecido;
 
   const updateMat = (erpCode, patch) =>

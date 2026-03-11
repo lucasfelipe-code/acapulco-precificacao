@@ -276,6 +276,16 @@ export function clearMateriaisCatalogCache() {
 }
 
 /**
+ * Busca produto pelo codigo2 (referência comercial dos vendedores, ex: "44560").
+ * Retorna o primeiro produto encontrado ou null.
+ */
+export async function getProdutoByCodigo2(codigo2) {
+  const data = await erpGet('/produto', { codigo2 });
+  const list = Array.isArray(data) ? data : [];
+  return list[0] || null;
+}
+
+/**
  * Lista clientes do ERP (tipoEntidade=C).
  * @param {string} nome   - filtro por nome (opcional)
  * @param {number} limit  - máximo de resultados (padrão 30)
@@ -343,26 +353,30 @@ export async function getDadosProdutoParaOrcamento(referencia, forceRefresh = fa
       : [];
 
   // ─── Materiais (abreviado = "C") ───────────────────────────────────────────
+  // codigoImpressao: "9" = tecido principal → sujeito ao guard dos 15 dias
+  //                  outros (acessório, embalagem, etc.) → sem guard de preço
   const materials = itens
     .filter(item => item.abreviado === 'C')
     .map(item => {
-      const dateStr   = item.dataAtualizacao || item.data || null;
-      const stale     = isMaterialDateStale(dateStr);
-      const staleDays = stale ? staleDaysFrom(dateStr) : null;
+      const dateStr    = item.dataAtualizacao || item.data || null;
+      const isFabric   = item.codigoImpressao === '9'; // tecido/malha principal
+      const stale      = isFabric ? isMaterialDateStale(dateStr) : false;
+      const staleDaysV = stale ? staleDaysFrom(dateStr) : null;
 
       return {
-        erpCode:     item.referencia?.codigo  || item.codigo  || null,
-        name:        item.referencia?.descricao || item.descricao || item.nome || 'Material',
+        erpCode:      item.referencia?.codigo   || item.codigo  || null,
+        name:         item.referencia?.descricao || item.descricao || item.nome || 'Material',
         // codigoImpressao: "9"=tecido principal, "2"=acessório, "3"=embalagem
-        category:    item.codigoImpressao    || null,
-        unit:        item.unidade            || 'un',
-        consumption: parseFloat(item.quantidade) || 1,
-        unitPrice:   parseFloat(item.custo)  || 0,
-        costPerPiece:parseFloat(item.valor)  || parseFloat(item.custo) * (parseFloat(item.quantidade) || 1) || 0,
+        category:     item.codigoImpressao    || null,
+        isFabric,
+        unit:         item.unidade            || 'un',
+        consumption:  parseFloat(item.quantidade) || 1,
+        unitPrice:    parseFloat(item.custo)  || 0,
+        costPerPiece: parseFloat(item.valor)  || parseFloat(item.custo) * (parseFloat(item.quantidade) || 1) || 0,
         erpPriceDate: (!dateStr || dateStr.startsWith(DELPHI_NULL_PREFIX)) ? null : new Date(dateStr),
-        isStale:     stale,
-        staleDays,
-        raw:         item,
+        isStale:      stale,
+        staleDays:    staleDaysV,
+        raw:          item,
       };
     });
 

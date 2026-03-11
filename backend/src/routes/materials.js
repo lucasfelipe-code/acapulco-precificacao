@@ -32,6 +32,21 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const DELPHI_NULL = '1899-12-30';
 const STALE_MS    = 15 * 24 * 60 * 60 * 1000;
 
+// Grupos de matéria-prima que exigem guard de 15 dias + frete de 3%
+// (tecidos, malhas, fios e similares — excluindo aviamentos e embalagens)
+const FABRIC_KEYWORDS = [
+  'TECIDO', 'MALHA', 'FIO', 'FIOS', 'FIBRA', 'FIBRAS',
+  'LONA', 'BRIM', 'SARJA', 'JERSEY', 'OXFORD', 'HELANCA',
+  'PIQUET', 'MOLETON', 'SPANDEX', 'ELASTANO', 'NYLON',
+  'POLIESTER', 'ALGODAO', 'VISCOSE', 'LYCRA',
+];
+
+function isFabricGroup(grupo) {
+  if (!grupo) return false;
+  const g = grupo.toUpperCase();
+  return FABRIC_KEYWORDS.some(k => g.includes(k));
+}
+
 function isStale(dateStr) {
   if (!dateStr || dateStr.startsWith(DELPHI_NULL)) return true;
   return (Date.now() - new Date(dateStr).getTime()) > STALE_MS;
@@ -42,24 +57,28 @@ function staleDays(dateStr) {
   return Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
 }
 
-/** Base do catálogo (/material): apenas descrição + unidade + grupo */
+/** Base do catálogo (/material): descrição + unidade + grupo + isFabric */
 function mapBase(m, similarity = null) {
+  const grupo    = m.grupo?.descricao || null;
+  const fabric   = isFabricGroup(grupo);
   return {
     codigo:    m.codigo,
     descricao: m.descricao || '',
-    grupo:     m.grupo?.descricao || null,
+    grupo,
     unidade:   m.unidade || 'un',
     preco:     parseFloat(m.precoMedio) || 0,
     data:      null,
-    isStale:   true,   // provisório — será substituído após enriquecimento
+    isFabric:  fabric,
+    isStale:   fabric, // provisório — substituído após enriquecimento; falso para não-tecidos
     staleDays: null,
     ...(similarity !== null && { similarity }),
   };
 }
 
 /**
- * Enriquece lista de materiais com preço real + data da última NF (15-day guard).
- * Chama /precomaterial?codigo=... em lote — uma única requisição ao ERP.
+ * Enriquece lista de materiais com preço real + data da última NF.
+ * Guard dos 15 dias aplicado SOMENTE a tecidos/malhas (isFabric=true).
+ * Uma única requisição ao ERP via /precomaterial?codigo=...
  */
 async function enrichWithPrices(items) {
   if (!items.length) return items;
@@ -67,24 +86,23 @@ async function enrichWithPrices(items) {
     const codigos = items.map(m => m.codigo);
     const precos  = await getPrecosMateriais(codigos);
 
-    // Índice por código para O(1) lookup
     const precoMap = {};
     precos.forEach(p => { precoMap[p.codigo] = p; });
 
     return items.map(m => {
       const p = precoMap[m.codigo];
-      if (!p) return m; // sem preço no ERP → mantém stale=true
+      if (!p) return m;
 
-      const stale  = isStale(p.data);
-      const dataNF = (!p.data || p.data.startsWith(DELPHI_NULL)) ? null : p.data;
+      const dataNF   = (!p.data || p.data.startsWith(DELPHI_NULL)) ? null : p.data;
+      // Guard de 15 dias apenas para tecidos/malhas
+      const stale    = m.isFabric ? isStale(p.data) : false;
 
       return {
         ...m,
-        preco:     parseFloat(p.preco1) || parseFloat(p.precoCompra) || m.preco || 0,
-        data:      dataNF,
-        isStale:   stale,
-        staleDays: stale ? staleDays(p.data) : null,
-        // Mensagem explicativa para o vendedor
+        preco:       parseFloat(p.preco1) || parseFloat(p.precoCompra) || m.preco || 0,
+        data:        dataNF,
+        isStale:     stale,
+        staleDays:   stale ? staleDays(p.data) : null,
         staleReason: stale
           ? (dataNF
               ? `Última NF de compra: ${new Date(dataNF).toLocaleDateString('pt-BR')} (${staleDays(p.data)} dias atrás)`
@@ -94,7 +112,7 @@ async function enrichWithPrices(items) {
     });
   } catch (e) {
     console.warn('[Materials] Falha ao buscar preços (/precomaterial):', e.message);
-    return items; // retorna sem enriquecimento — stale=true por padrão
+    return items;
   }
 }
 

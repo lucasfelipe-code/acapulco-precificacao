@@ -1,16 +1,25 @@
 import { useMemo } from 'react';
 
+const FABRIC_FREIGHT_RATE = 0.03; // 3% sobre custo de tecidos/malhas
+
 const calcPricing = (data) => {
-  const totalMaterial = (data.materials || [])
-    .filter(m => !m.removed)
+  const activeMats = (data.materials || []).filter(m => !m.removed);
+
+  const totalMaterial = activeMats
     .reduce((sum, m) => sum + (m.priceOverride ?? m.unitPrice ?? 0) * (m.consumption ?? 1), 0);
+
+  // 3% frete aplicado apenas sobre materiais de tecido/malha (isFabric ou category==='9')
+  const totalFabricMaterial = activeMats
+    .filter(m => m.isFabric || m.category === '9')
+    .reduce((sum, m) => sum + (m.priceOverride ?? m.unitPrice ?? 0) * (m.consumption ?? 1), 0);
+  const fabricFreight = totalFabricMaterial * FABRIC_FREIGHT_RATE;
 
   const totalFabrication = (data.fabricationItems || [])
     .reduce((sum, f) => sum + (f.unitCost ?? 0) * (f.quantity ?? 1), 0);
 
   const embroideryCost = data.embroideryCost || 0;
   const printCost      = data.printCostPerPiece || data.printCost || 0;
-  const subtotal       = totalMaterial + totalFabrication + embroideryCost + printCost;
+  const subtotal       = totalMaterial + fabricFreight + totalFabrication + embroideryCost + printCost;
   const urgency        = data.urgent ? subtotal * 0.15 : 0;
   const costPerPiece   = subtotal + urgency;
 
@@ -32,7 +41,7 @@ const calcPricing = (data) => {
   const pricePerPiece = priceBeforeDiscount * (1 - (data.discount || 0) / 100);
   const margin        = costPerPiece > 0 ? ((pricePerPiece - costPerPiece) / pricePerPiece) * 100 : 0;
 
-  return { totalMaterial, totalFabrication, embroideryCost, printCost, costPerPiece, pricePerPiece, margin, totalOrderValue: pricePerPiece * (data.quantity || 1), effectiveMarkup };
+  return { totalMaterial, fabricFreight, totalFabrication, embroideryCost, printCost, costPerPiece, pricePerPiece, margin, totalOrderValue: pricePerPiece * (data.quantity || 1), effectiveMarkup };
 };
 
 export default function Step4Pricing({ data, update, onNext, onBack }) {
@@ -42,11 +51,23 @@ export default function Step4Pricing({ data, update, onNext, onBack }) {
     data.urgent, data.markup, data.markupCoeficiente, data.discount, data.quantity,
   ]);
 
+  // Adiciona fabricFreight ao useMemo deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+
   const getMarginColor = (margin) => {
     if (margin >= 40) return 'text-green-700';
     if (margin >= 25) return 'text-yellow-700';
     return 'text-red-700';
   };
+
+  // Breakdown de custo detalhado
+  const costBreakdown = [
+    { label: 'Matéria-prima',        value: pricing.totalMaterial },
+    ...(pricing.fabricFreight > 0 ? [{ label: 'Frete tecidos/malhas (3%)', value: pricing.fabricFreight }] : []),
+    { label: 'M.O. / Fabricação',    value: pricing.totalFabrication },
+    ...(pricing.embroideryCost > 0 ? [{ label: 'Bordado', value: pricing.embroideryCost }] : []),
+    ...(pricing.printCost > 0       ? [{ label: 'Estampa/Sublimação', value: pricing.printCost }] : []),
+  ];
 
   return (
     <div className="space-y-5">
@@ -151,14 +172,21 @@ export default function Step4Pricing({ data, update, onNext, onBack }) {
       <div className="p-5 bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-200 rounded-xl">
         <p className="text-xs font-semibold text-orange-700 uppercase tracking-wide mb-3">Resultado da Precificação</p>
 
-        <div className="grid grid-cols-2 gap-4">
-          <div className="bg-white rounded-lg p-3 border border-orange-100">
-            <p className="text-xs text-gray-500">Custo por Peça</p>
-            <p className="text-xl font-bold text-gray-900">
-              R$ {pricing.costPerPiece.toFixed(2)}
-            </p>
+        {/* Breakdown de custo */}
+        <div className="bg-white rounded-lg border border-orange-100 px-3 py-2 mb-3 space-y-1">
+          {costBreakdown.map((item) => (
+            <div key={item.label} className="flex justify-between text-xs text-gray-600">
+              <span>{item.label}</span>
+              <span className="font-medium">R$ {item.value.toFixed(2)}</span>
+            </div>
+          ))}
+          <div className="flex justify-between text-sm font-semibold text-gray-900 pt-1 border-t border-orange-100">
+            <span>Custo por Peça</span>
+            <span>R$ {pricing.costPerPiece.toFixed(2)}</span>
           </div>
+        </div>
 
+        <div className="grid grid-cols-2 gap-4">
           <div className="bg-white rounded-lg p-3 border border-orange-100">
             <p className="text-xs text-gray-500">Preço Sugerido</p>
             <p className="text-xl font-bold text-orange-700">
@@ -173,7 +201,7 @@ export default function Step4Pricing({ data, update, onNext, onBack }) {
             </p>
           </div>
 
-          <div className="bg-white rounded-lg p-3 border border-orange-100">
+          <div className="bg-white rounded-lg p-3 border border-orange-100 col-span-2">
             <p className="text-xs text-gray-500">Total do Pedido ({data.quantity} pcs)</p>
             <p className="text-xl font-bold text-gray-900">
               R$ {pricing.totalOrderValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}

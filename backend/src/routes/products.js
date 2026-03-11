@@ -11,7 +11,7 @@ import {
   getFormacaoPreco,
   getCombinacaoProduto,
   getProdutosList,
-  getProdutoByCodigo,
+  getProdutoByCodigo2,
 } from '../services/erpService.js';
 
 const router = Router();
@@ -60,29 +60,27 @@ router.get('/:referencia', async (req, res, next) => {
   const forceRefresh   = req.query.refresh === 'true';
 
   /**
-   * Resolução de código:
-   * 1. Tenta formacao-preco diretamente pelo código informado (ex: 4647)
-   * 2. Se falhar (400/404): busca o produto pelo código para inspecionar `codigo2`
-   *    Ex: 00030 → codigo2 "4647.ORALUNIC" → extrai base "4647" → tenta novamente
+   * Resolução de código (codigo2 é a referência comercial usada pelos vendedores):
+   * 1. Tenta resolver pelo codigo2 → obtém o codigo interno do ERP
+   * 2. Usa o codigo interno para /formacao-preco e demais chamadas
+   * 3. Fallback: usa o código informado diretamente (compatibilidade)
    */
   async function resolveErp(code) {
+    // Tenta primeiro por codigo2 (referência comercial, ex: "44560")
+    let actualCode = code;
     try {
-      return await getDadosProdutoParaOrcamento(code, forceRefresh);
+      const byCode2 = await getProdutoByCodigo2(code);
+      if (byCode2?.codigo) actualCode = byCode2.codigo;
+    } catch { /* silencioso — prossegue com código original */ }
+
+    try {
+      return await getDadosProdutoParaOrcamento(actualCode, forceRefresh);
     } catch (firstErr) {
       const isNotFound = firstErr.response?.status === 400 || firstErr.response?.status === 404;
-      if (!isNotFound) throw firstErr;
+      if (!isNotFound || actualCode === code) throw firstErr;
 
-      // Tenta obter o produto raw para extrair codigo2
-      let rawProduto = null;
-      try { rawProduto = await getProdutoByCodigo(code, true); } catch { /* silencioso */ }
-
-      const codigo2   = rawProduto?.codigo2 || '';
-      const baseCode  = codigo2.includes('.') ? codigo2.split('.')[0] : null;
-
-      if (baseCode && baseCode !== code) {
-        return getDadosProdutoParaOrcamento(baseCode, forceRefresh);
-      }
-      throw firstErr; // não foi possível resolver
+      // Fallback: tenta com código original caso resolução por codigo2 tenha mudado algo
+      return getDadosProdutoParaOrcamento(code, forceRefresh);
     }
   }
 
