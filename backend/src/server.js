@@ -12,6 +12,7 @@ import costRoutes       from './routes/costs.js';
 import embroideryRoutes from './routes/embroidery.js';
 import approvalRoutes   from './routes/approvals.js';
 import clientRoutes     from './routes/clients.js';
+import materialsRoutes  from './routes/materials.js';
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -56,6 +57,7 @@ app.use('/api/costs',      costRoutes);
 app.use('/api/embroidery', embroideryRoutes);
 app.use('/api/approvals',  approvalRoutes);
 app.use('/api/clients',    clientRoutes);
+app.use('/api/materials',  materialsRoutes);
 
 // ─── Error handler ────────────────────────────────────────────────────────────
 app.use((err, _req, res, _next) => {

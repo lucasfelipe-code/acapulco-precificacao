@@ -73,6 +73,16 @@ export const costsAPI = {
   delete:  (id)       => api.delete(`/costs/${id}`),
 };
 
+// ─── Materials (catálogo ERP + IA) ────────────────────────────────────────────
+export const materialsAPI = {
+  // Busca textual simples no catálogo ERP (cache 4h)
+  search:    (q)           => api.get('/materials/search', { params: { q } }),
+  // IA sugere melhor match + até 10 similares (≥80%)
+  aiSuggest: (description) => api.post('/materials/ai-suggest', { description }),
+  // Força recarga do catálogo (admin)
+  refresh:   ()            => api.post('/materials/catalog/refresh'),
+};
+
 // ─── Clients ──────────────────────────────────────────────────────────────────
 export const clientsAPI = {
   search: (q = '') => api.get('/clients', { params: q ? { q } : {} }),

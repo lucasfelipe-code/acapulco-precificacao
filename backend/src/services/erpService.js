@@ -236,6 +236,33 @@ export async function getPrecoNaTabela(codigoTabela, codigoProduto) {
   return erpGet(`/preco/${codigoTabela}/${codigoProduto}`);
 }
 
+// ─── Catálogo de materiais (cache em memória, 4h) ─────────────────────────────
+let _materialCatalog  = null;
+let _catalogExpiry    = null;
+const CATALOG_TTL_MS  = 4 * 60 * 60 * 1000; // 4 horas
+
+/**
+ * Retorna catálogo completo de materiais ativos do ERP com preços.
+ * Cache em memória de 4 horas — suficiente para evitar hammering no ERP.
+ */
+export async function getMateriaisCatalog() {
+  if (_materialCatalog && Date.now() < _catalogExpiry) return _materialCatalog;
+
+  // /precomaterial sem filtro retorna todos os materiais com preço e data
+  const data = await erpGet('/precomaterial', { limit: 500 });
+  _materialCatalog = Array.isArray(data) ? data : [];
+  _catalogExpiry   = Date.now() + CATALOG_TTL_MS;
+  return _materialCatalog;
+}
+
+/**
+ * Força recarga do catálogo de materiais.
+ */
+export function clearMateriaisCatalogCache() {
+  _materialCatalog = null;
+  _catalogExpiry   = null;
+}
+
 /**
  * Lista clientes do ERP (tipoEntidade=C).
  * @param {string} nome   - filtro por nome (opcional)
