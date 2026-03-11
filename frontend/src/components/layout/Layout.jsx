@@ -12,7 +12,7 @@ const navItems = [
   { to: '/quotes',    label: 'Orçamentos',        icon: FileText,        roles: ['COMMERCIAL', 'APPROVER', 'ADMIN'] },
   { to: '/approvals', label: 'Aprovações',        icon: CheckCircle,     roles: ['APPROVER', 'ADMIN'] },
   { to: '/prices',    label: 'Atualizar Preços',  icon: DollarSign,      roles: ['COMPRADOR', 'ADMIN'] },
-  { to: '/costs',     label: 'Custos Fabricação', icon: Settings,        roles: ['ADMIN'] },
+  { to: '/costs',     label: 'Custos Fabricação', icon: Settings,        roles: ['COMPRADOR', 'ADMIN'] },
   { to: '/users',     label: 'Usuários',          icon: Users,           roles: ['ADMIN'] },
 ];
 

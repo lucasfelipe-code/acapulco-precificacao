@@ -68,9 +68,9 @@ export default function App() {
               </ProtectedRoute>
             } />
 
-            {/* Custos de fabricação — Administrador */}
+            {/* Custos de fabricação — Comprador e Administrador */}
             <Route path="costs" element={
-              <ProtectedRoute roles={['ADMIN']}>
+              <ProtectedRoute roles={['COMPRADOR', 'ADMIN']}>
                 <CostsPage />
               </ProtectedRoute>
             } />

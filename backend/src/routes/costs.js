@@ -139,8 +139,8 @@ router.get('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/costs — criar (apenas ADMIN)
-router.post('/', requireRole('ADMIN'), async (req, res, next) => {
+// POST /api/costs — criar (ADMIN e COMPRADOR)
+router.post('/', requireRole('ADMIN', 'COMPRADOR'), async (req, res, next) => {
   try {
     const { referencia, descricao, categoria, subcategoria, basePrice, tiers, extras } = req.body;
     const cost = await prisma.manufacturingCost.create({
@@ -158,8 +158,8 @@ router.post('/', requireRole('ADMIN'), async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// PUT /api/costs/:id — editar (apenas ADMIN)
-router.put('/:id', requireRole('ADMIN'), async (req, res, next) => {
+// PUT /api/costs/:id — editar (ADMIN e COMPRADOR)
+router.put('/:id', requireRole('ADMIN', 'COMPRADOR'), async (req, res, next) => {
   try {
     const { descricao, categoria, subcategoria, basePrice, tiers, extras, active } = req.body;
     const cost = await prisma.manufacturingCost.update({
@@ -178,8 +178,8 @@ router.put('/:id', requireRole('ADMIN'), async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// DELETE /api/costs/:id — soft delete (apenas ADMIN)
-router.delete('/:id', requireRole('ADMIN'), async (req, res, next) => {
+// DELETE /api/costs/:id — soft delete (ADMIN e COMPRADOR)
+router.delete('/:id', requireRole('ADMIN', 'COMPRADOR'), async (req, res, next) => {
   try {
     await prisma.manufacturingCost.update({
       where: { id: parseInt(req.params.id) },

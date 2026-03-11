@@ -101,9 +101,11 @@ export default function Step3Processes({ data, update, onNext, onBack }) {
   const [fabricItems, setFabricItems] = useState(data.fabricationItems || []);
   const [loadingFabric, setLoadingFabric] = useState(false);
 
-  // Carrega custos de fabricação ao entrar na etapa (se ainda não carregou)
+  // Carrega custos de fabricação ao entrar na etapa.
+  // Recarrega se itens são formato ERP bruto (sem campo `categoria` local).
   useEffect(() => {
-    if (data.itemType && data.quantity && (!data.fabricationItems || data.fabricationItems.length === 0)) {
+    const hasLocalItems = data.fabricationItems?.some(f => f.categoria);
+    if (data.itemType && data.quantity && !hasLocalItems) {
       loadFabricationCosts();
     }
   }, []);

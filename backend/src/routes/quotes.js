@@ -160,36 +160,42 @@ router.post('/', async (req, res, next) => {
 
         // Materiais do BOM
         materials: body.materials?.length ? {
-          create: body.materials.map((m) => ({
-            erpCode:      m.erpCode,
-            name:         m.name,
-            category:     m.category     || null,
-            unit:         m.unit         || 'un',
-            consumption:  m.consumption,
-            unitPrice:    m.unitPrice,
-            priceOverride: m.priceOverride || null,
-            priceSource:  m.priceOverride ? 'MANUAL' : 'ERP',
-            priceNote:    m.priceNote    || null,
-            erpPriceDate: m.erpPriceDate ? new Date(m.erpPriceDate) : null,
-            isStale:      m.isStale      || false,
-            staleDays:    m.staleDays    || null,
-            costPerPiece: (m.priceOverride ?? m.unitPrice) * m.consumption,
-            addedManually: m.addedManually || false,
-            removed:      m.removed       || false,
-          })),
+          create: body.materials.map((m) => {
+            const cons  = m.consumptionOverride ?? m.consumption ?? 1;
+            const price = m.priceOverride ?? m.unitPrice ?? 0;
+            return {
+              erpCode:      m.erpCode      || `manual-${Date.now()}`,
+              name:         m.name         || 'Material',
+              category:     m.category     || null,
+              unit:         m.unit         || 'un',
+              consumption:  parseFloat(cons)   || 1,
+              unitPrice:    parseFloat(m.unitPrice)  || 0,
+              priceOverride: m.priceOverride != null ? parseFloat(m.priceOverride) : null,
+              priceSource:  m.priceOverride != null ? 'MANUAL' : 'ERP',
+              priceNote:    m.priceNote    || null,
+              erpPriceDate: m.erpPriceDate ? new Date(m.erpPriceDate) : null,
+              isStale:      m.isStale      || false,
+              staleDays:    m.staleDays    != null ? Math.round(m.staleDays) : null,
+              costPerPiece: parseFloat((price * cons).toFixed(4)),
+              addedManually: m.addedManually || false,
+              removed:      m.removed       || false,
+            };
+          }),
         } : undefined,
 
-        // Itens de fabricação
-        fabricationItems: body.fabricationItems?.length ? {
-          create: body.fabricationItems.map((f) => ({
-            manufacturingCostId: f.manufacturingCostId || null,
-            categoria:   f.categoria,
-            descricao:   f.descricao,
-            tierApplied: f.tierApplied || null,
-            unitCost:    f.unitCost,
-            quantity:    f.quantity    || 1,
-            totalCost:   f.unitCost * (f.quantity || 1),
-          })),
+        // Itens de fabricação — filtra itens sem categoria/descricao (formato ERP bruto)
+        fabricationItems: body.fabricationItems?.filter(f => f.categoria || f.descricao || f.name)?.length ? {
+          create: body.fabricationItems
+            .filter(f => f.categoria || f.descricao || f.name)
+            .map((f) => ({
+              manufacturingCostId: f.manufacturingCostId || null,
+              categoria:   f.categoria   || 'outros',
+              descricao:   f.descricao   || f.name || 'Processo',
+              tierApplied: f.tierApplied || null,
+              unitCost:    parseFloat(f.unitCost)  || 0,
+              quantity:    parseInt(f.quantity)    || 1,
+              totalCost:   parseFloat((f.unitCost || 0) * (f.quantity || 1)).valueOf(),
+            })),
         } : undefined,
       },
       include: { materials: true, fabricationItems: true },
@@ -255,35 +261,41 @@ router.put('/:id', async (req, res, next) => {
         internalNotes: body.internalNotes?? quote.internalNotes,
 
         materials: body.materials?.length ? {
-          create: body.materials.map((m) => ({
-            erpCode:      m.erpCode,
-            name:         m.name,
-            category:     m.category    || null,
-            unit:         m.unit        || 'un',
-            consumption:  m.consumption,
-            unitPrice:    m.unitPrice,
-            priceOverride: m.priceOverride || null,
-            priceSource:  m.priceOverride ? 'MANUAL' : 'ERP',
-            priceNote:    m.priceNote   || null,
-            erpPriceDate: m.erpPriceDate ? new Date(m.erpPriceDate) : null,
-            isStale:      m.isStale     || false,
-            staleDays:    m.staleDays   || null,
-            costPerPiece: (m.priceOverride ?? m.unitPrice) * m.consumption,
-            addedManually: m.addedManually || false,
-            removed:      m.removed      || false,
-          })),
+          create: body.materials.map((m) => {
+            const cons  = m.consumptionOverride ?? m.consumption ?? 1;
+            const price = m.priceOverride ?? m.unitPrice ?? 0;
+            return {
+              erpCode:      m.erpCode      || `manual-${Date.now()}`,
+              name:         m.name         || 'Material',
+              category:     m.category     || null,
+              unit:         m.unit         || 'un',
+              consumption:  parseFloat(cons)   || 1,
+              unitPrice:    parseFloat(m.unitPrice)  || 0,
+              priceOverride: m.priceOverride != null ? parseFloat(m.priceOverride) : null,
+              priceSource:  m.priceOverride != null ? 'MANUAL' : 'ERP',
+              priceNote:    m.priceNote    || null,
+              erpPriceDate: m.erpPriceDate ? new Date(m.erpPriceDate) : null,
+              isStale:      m.isStale      || false,
+              staleDays:    m.staleDays    != null ? Math.round(m.staleDays) : null,
+              costPerPiece: parseFloat((price * cons).toFixed(4)),
+              addedManually: m.addedManually || false,
+              removed:      m.removed       || false,
+            };
+          }),
         } : undefined,
 
-        fabricationItems: body.fabricationItems?.length ? {
-          create: body.fabricationItems.map((f) => ({
-            manufacturingCostId: f.manufacturingCostId || null,
-            categoria:   f.categoria,
-            descricao:   f.descricao,
-            tierApplied: f.tierApplied || null,
-            unitCost:    f.unitCost,
-            quantity:    f.quantity    || 1,
-            totalCost:   f.unitCost * (f.quantity || 1),
-          })),
+        fabricationItems: body.fabricationItems?.filter(f => f.categoria || f.descricao || f.name)?.length ? {
+          create: body.fabricationItems
+            .filter(f => f.categoria || f.descricao || f.name)
+            .map((f) => ({
+              manufacturingCostId: f.manufacturingCostId || null,
+              categoria:   f.categoria   || 'outros',
+              descricao:   f.descricao   || f.name || 'Processo',
+              tierApplied: f.tierApplied || null,
+              unitCost:    parseFloat(f.unitCost)  || 0,
+              quantity:    parseInt(f.quantity)    || 1,
+              totalCost:   parseFloat((f.unitCost || 0) * (f.quantity || 1)).valueOf(),
+            })),
         } : undefined,
       },
       include: { materials: true, fabricationItems: true },
