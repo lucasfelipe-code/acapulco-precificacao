@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Search, AlertTriangle, CheckCircle, RefreshCw, Zap,
-  ChevronDown, X, UserPlus, Building2,
+  ChevronDown, X, Building2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { productsAPI, clientsAPI } from '../../../services/api';
@@ -89,13 +89,10 @@ function Combobox({ items, value, onInput, onSelect, onClear, placeholder, loadi
 
 // ─── ClientSection ───────────────────────────────────────────────────────────
 function ClientSection({ data, update }) {
-  const [query, setQuery]           = useState(data.clientName || '');
-  const [results, setResults]       = useState([]);
-  const [searching, setSearching]   = useState(false);
-  const [manualMode, setManualMode] = useState(false);
-  const [saving, setSaving]         = useState(false);
-  const [newClient, setNewClient]   = useState({ name: '', cnpj: '', phone: '', segment: '' });
-  const debounceRef                 = useRef(null);
+  const [query, setQuery]         = useState(data.clientName || '');
+  const [results, setResults]     = useState([]);
+  const [searching, setSearching] = useState(false);
+  const debounceRef               = useRef(null);
 
   // Debounce search
   useEffect(() => {
@@ -114,7 +111,6 @@ function ClientSection({ data, update }) {
   const selectClient = (client) => {
     setQuery(client.name);
     update({
-      clientId:      client.id,
       clientName:    client.name,
       clientSegment: client.segment || data.clientSegment,
       clientCnpj:    client.cnpj   || null,
@@ -123,83 +119,8 @@ function ClientSection({ data, update }) {
 
   const clearClient = () => {
     setQuery('');
-    update({ clientId: null, clientName: '', clientSegment: '', clientCnpj: null });
+    update({ clientName: '', clientSegment: '', clientCnpj: null });
   };
-
-  const saveNewClient = async () => {
-    if (!newClient.name.trim()) { toast.error('Informe o nome do cliente'); return; }
-    setSaving(true);
-    try {
-      const { data: created } = await clientsAPI.create({
-        name:    newClient.name.trim(),
-        cnpj:    newClient.cnpj    || null,
-        phone:   newClient.phone   || null,
-        segment: newClient.segment || null,
-      });
-      selectClient(created);
-      setManualMode(false);
-      toast.success('Cliente cadastrado com sucesso');
-    } catch {
-      toast.error('Erro ao salvar cliente');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (manualMode) {
-    return (
-      <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-3">
-        <div className="flex items-center justify-between">
-          <p className="text-sm font-medium text-blue-800 flex items-center gap-1.5">
-            <UserPlus className="w-4 h-4" /> Novo Cliente
-          </p>
-          <button type="button" onClick={() => setManualMode(false)} className="text-xs text-blue-600 hover:underline">
-            Cancelar
-          </button>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="col-span-2">
-            <label className="label">Nome *</label>
-            <input className="input" value={newClient.name}
-              onChange={e => setNewClient(p => ({ ...p, name: e.target.value }))}
-              placeholder="Razão social ou nome" />
-          </div>
-          <div>
-            <label className="label">CNPJ</label>
-            <input className="input" value={newClient.cnpj}
-              onChange={e => setNewClient(p => ({ ...p, cnpj: e.target.value }))}
-              placeholder="00.000.000/0001-00" />
-          </div>
-          <div>
-            <label className="label">Telefone</label>
-            <input className="input" value={newClient.phone}
-              onChange={e => setNewClient(p => ({ ...p, phone: e.target.value }))}
-              placeholder="(00) 00000-0000" />
-          </div>
-          <div className="col-span-2">
-            <label className="label">Segmento</label>
-            <select className="input" value={newClient.segment}
-              onChange={e => setNewClient(p => ({ ...p, segment: e.target.value }))}>
-              <option value="">Selecione...</option>
-              {SEGMENTS.map(s => <option key={s}>{s}</option>)}
-            </select>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <button type="button" onClick={saveNewClient} disabled={saving}
-            className="btn-primary text-sm py-1.5">
-            {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <UserPlus className="w-3.5 h-3.5" />}
-            Salvar Cliente
-          </button>
-          <button type="button"
-            onClick={() => { update({ clientName: newClient.name, clientId: null }); setQuery(newClient.name); setManualMode(false); }}
-            className="btn-secondary text-sm py-1.5">
-            Usar sem salvar
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-3">
@@ -209,12 +130,12 @@ function ClientSection({ data, update }) {
           <Combobox
             items={results}
             value={query}
-            onInput={(v) => { setQuery(v); update({ clientName: v, clientId: null }); }}
+            onInput={(v) => { setQuery(v); update({ clientName: v }); }}
             onSelect={selectClient}
             onClear={clearClient}
             placeholder="Busque pelo nome ou CNPJ..."
             loading={searching}
-            noResultsMsg={`"${query}" não encontrado — cadastre um novo cliente`}
+            noResultsMsg={`"${query}" não encontrado no ERP — continue digitando para usar o nome como está`}
             renderItem={(c) => (
               <div className="flex items-start gap-2">
                 <Building2 className="w-4 h-4 text-gray-400 shrink-0 mt-0.5" />
@@ -226,11 +147,10 @@ function ClientSection({ data, update }) {
                 </div>
               </div>
             )}
-            footer={{ icon: <UserPlus className="w-4 h-4" />, label: 'Cadastrar novo cliente...', action: () => { setNewClient({ name: query, cnpj: '', phone: '', segment: '' }); setManualMode(true); } }}
           />
-          {data.clientId && (
+          {data.clientName && results.some(r => r.name === data.clientName) && (
             <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
-              <CheckCircle className="w-3 h-3" /> Cliente vinculado ao cadastro
+              <CheckCircle className="w-3 h-3" /> Cliente encontrado no ERP
             </p>
           )}
         </div>

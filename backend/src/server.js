@@ -22,12 +22,16 @@ const PORT = process.env.PORT || 3001;
 app.use(helmet());
 const allowedOrigins = [
   process.env.FRONTEND_URL,
-  'http://localhost:5173',
 ].filter(Boolean);
 
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin || allowedOrigins.some(o => origin === o || origin.endsWith('.vercel.app'))) {
+    if (
+      !origin ||
+      origin.startsWith('http://localhost:') ||
+      origin.startsWith('http://127.0.0.1:') ||
+      allowedOrigins.some(o => origin === o || origin.endsWith('.vercel.app'))
+    ) {
       cb(null, true);
     } else {
       cb(new Error('Not allowed by CORS'));

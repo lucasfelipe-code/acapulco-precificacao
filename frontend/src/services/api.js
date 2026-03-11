@@ -87,8 +87,6 @@ export const materialsAPI = {
 export const clientsAPI = {
   search: (q = '') => api.get('/clients', { params: q ? { q } : {} }),
   get:    (id)     => api.get(`/clients/${id}`),
-  create: (data)   => api.post('/clients', data),
-  update: (id, data) => api.put(`/clients/${id}`, data),
 };
 
 // ─── Users (admin) ────────────────────────────────────────────────────────

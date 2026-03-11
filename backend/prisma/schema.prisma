@@ -37,38 +37,15 @@ enum Role {
   COMPRADOR   // Comprador — gestão de preços de matéria-prima
 }
 
-// ─── Clientes ─────────────────────────────────────────────────────────────────
-
-model Client {
-  id        Int      @id @default(autoincrement())
-  name      String
-  cnpj      String?
-  email     String?
-  phone     String?
-  address   String?
-  city      String?
-  state     String?
-  segment   String?
-  notes     String?
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  quotes    Quote[]
-
-  @@map("clients")
-}
-
 // ─── Orçamentos ───────────────────────────────────────────────────────────────
+// Clientes não são armazenados localmente — vêm do ERP (Sisplan /entidade).
 
 model Quote {
   id          Int         @id @default(autoincrement())
   number      String      @unique // ex: ORC-2026-0001
   status      QuoteStatus @default(DRAFT)
 
-  // Cliente — pode ser vinculado ao cadastro ou preenchido manualmente
-  clientId      Int?
-  client        Client?  @relation(fields: [clientId], references: [id])
+  // Cliente (dados do ERP copiados no momento do orçamento)
   clientName    String
   clientSegment String?
   clientCnpj    String?
