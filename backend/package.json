@@ -2,6 +2,7 @@
   "name": "acapulco-backend",
   "version": "1.0.0",
   "description": "Acapulco Uniformes - Sistema de Precificação",
+  "type": "module",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",

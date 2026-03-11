@@ -1,0 +1,312 @@
+// schema.prisma — Acapulco Uniformes — Sistema de Precificação
+// ERP: Sisplan v2.0.0 via Cloudflare Tunnel
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Autenticação ──────────────────────────────────────────────────────────────
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  name      String
+  password  String
+  role      Role     @default(COMMERCIAL)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  quotes         Quote[]
+  approvalsDone  QuoteApproval[]
+  embroideries   EmbroideryJob[]
+
+  @@map("users")
+}
+
+enum Role {
+  ADMIN
+  COMMERCIAL
+  APPROVER
+  PRODUCTION
+}
+
+// ─── Clientes ─────────────────────────────────────────────────────────────────
+
+model Client {
+  id        Int      @id @default(autoincrement())
+  name      String
+  cnpj      String?
+  email     String?
+  phone     String?
+  address   String?
+  city      String?
+  state     String?
+  segment   String?
+  notes     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  quotes    Quote[]
+
+  @@map("clients")
+}
+
+// ─── Orçamentos ───────────────────────────────────────────────────────────────
+
+model Quote {
+  id          Int         @id @default(autoincrement())
+  number      String      @unique // ex: ORC-2026-0001
+  status      QuoteStatus @default(DRAFT)
+
+  // Cliente — pode ser vinculado ao cadastro ou preenchido manualmente
+  clientId      Int?
+  client        Client?  @relation(fields: [clientId], references: [id])
+  clientName    String
+  clientSegment String?
+  clientCnpj    String?
+
+  // Produto (dados do ERP capturados no momento do orçamento)
+  reference     String   // código ERP
+  productName   String
+  itemType      String?  // Jaleco, Camisa Social, etc.
+  quantity      Int
+  orderType     OrderType @default(RETAIL)
+  urgent        Boolean   @default(false)
+
+  // Variações escolhidas
+  sizes   String?  // JSON: ["P","M","G"]
+
+  // ─── Matéria-prima (snapshot do ERP no momento do orçamento)
+  materials     QuoteMaterial[]
+
+  // ─── Processos de fabricação
+  fabricationItems  QuoteFabrication[]
+
+  // ─── Personalização
+  embroideryJobId  Int?
+  embroideryJob    EmbroideryJob? @relation(fields: [embroideryJobId], references: [id])
+  embroideryStatus EmbroideryStatus @default(NOT_APPLICABLE)
+
+  printType    PrintType?
+  printWidthCm Float?
+  printHeightCm Float?
+  printColors  Int?
+  printCostPerPiece Float?
+
+  // ─── Precificação
+  costPerPiece      Float?  // custo total calculado
+  markupPercent     Float?  // markup aplicado (do ERP ou ajustado)
+  markupSource      String? // "ERP" | "MANUAL"
+  discountPercent   Float   @default(0)
+  pricePerPiece     Float?  // preço de venda
+  totalOrderValue   Float?
+  marginPercent     Float?
+
+  notes         String?
+  internalNotes String? // apenas ADMIN/APPROVER vê
+
+  createdBy   Int
+  user        User   @relation(fields: [createdBy], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  approvals   QuoteApproval[]
+
+  @@map("quotes")
+}
+
+enum QuoteStatus {
+  DRAFT                  // rascunho
+  AWAITING_EMBROIDERY    // aguardando confirmação do bordador
+  PENDING_APPROVAL       // enviado para aprovação interna
+  APPROVED               // aprovado
+  REJECTED               // rejeitado
+  REVISION_REQUESTED     // volta para revisão
+}
+
+enum OrderType {
+  RETAIL
+  WHOLESALE
+}
+
+enum EmbroideryStatus {
+  NOT_APPLICABLE
+  ESTIMATED      // estimado pela IA, pendente confirmação do bordador
+  CONFIRMED      // bordador confirmou o preço
+}
+
+enum PrintType {
+  SILK_SCREEN
+  DTF
+  SUBLIMATION
+  TRANSFER
+}
+
+// ─── Materiais do Orçamento (snapshot do ERP) ────────────────────────────────
+
+model QuoteMaterial {
+  id      Int   @id @default(autoincrement())
+  quoteId Int
+  quote   Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  // Dados do ERP
+  erpCode       String   // código do insumo no ERP
+  name          String
+  category      String?  // tecido, aviamento, entretela, etc.
+  unit          String?  // metro, unidade, kg
+
+  consumption   Float    // consumo por peça (unidade do ERP)
+  unitPrice     Float    // preço snapshot do ERP
+  priceOverride Float?   // preço corrigido manualmente pelo Lucas
+  priceSource   String   @default("ERP") // "ERP" | "MANUAL"
+  priceNote     String?  // ex: "Verificado com Fornecedor X em 10/03/2026"
+
+  erpPriceDate  DateTime? // campo `data` do /precomaterial no ERP
+  isStale       Boolean   @default(false) // > 15 dias sem atualização
+  staleDays     Int?      // quantos dias sem atualização
+
+  costPerPiece  Float    // unitPrice (ou override) × consumption
+
+  addedManually Boolean  @default(false) // material adicionado fora do BOM padrão
+  removed       Boolean  @default(false) // material do BOM removido pelo Lucas
+
+  @@map("quote_materials")
+}
+
+// ─── Processos de Fabricação do Orçamento ───────────────────────────────────
+
+model QuoteFabrication {
+  id      Int   @id @default(autoincrement())
+  quoteId Int
+  quote   Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  manufacturingCostId Int?
+  manufacturingCost   ManufacturingCost? @relation(fields: [manufacturingCostId], references: [id])
+
+  categoria   String  // camisaria, talhacao, embalagem, etc.
+  descricao   String
+  tierApplied String? // ex: "ate500", "ate1000"
+  unitCost    Float
+  quantity    Int     @default(1)
+  totalCost   Float
+
+  @@map("quote_fabrication")
+}
+
+// ─── Custos de Fabricação (Planilha Local) ───────────────────────────────────
+
+model ManufacturingCost {
+  id          Int      @id @default(autoincrement())
+  referencia  String   @unique
+  descricao   String
+  categoria   String   // camisaria | caseado_botao | embalagem | talhacao | estamparia | sublimacao | outros
+  subcategoria String?
+  basePrice   Float
+
+  // Tiers de quantidade — JSON
+  // { "ate500": 15.00, "ate1000": 14.85, "ate3000": 14.70, "ate5000": 14.55, "acima5000": 14.40 }
+  tiers       String?
+
+  // Extras — JSON
+  // { "bolso": 1.50, "punho": 0.80, "golaRetilinea": 2.00 }
+  extras      String?
+
+  active      Boolean  @default(true)
+  updatedAt   DateTime @updatedAt
+
+  quoteItems  QuoteFabrication[]
+
+  @@map("manufacturing_costs")
+}
+
+// ─── Aprovação de Orçamentos ─────────────────────────────────────────────────
+
+model QuoteApproval {
+  id        Int              @id @default(autoincrement())
+  quoteId   Int
+  quote     Quote            @relation(fields: [quoteId], references: [id])
+  userId    Int
+  user      User             @relation(fields: [userId], references: [id])
+  decision  ApprovalDecision
+  notes     String?
+  createdAt DateTime         @default(now())
+
+  @@map("quote_approvals")
+}
+
+enum ApprovalDecision {
+  APPROVED
+  REJECTED
+  REVISION_REQUESTED
+}
+
+// ─── Biblioteca de Bordados ──────────────────────────────────────────────────
+// Bordados anteriores usados como referência para precificação de bordados novos
+
+model EmbroideryJob {
+  id          Int      @id @default(autoincrement())
+  name        String   // descrição do bordado (ex: "Logo Hospital São Lucas")
+  clientRef   String?  // referência do cliente
+
+  // Dimensões
+  widthCm     Float
+  heightCm    Float
+  areaCm2     Float    // width × height
+
+  // Características técnicas
+  estimatedPoints   Int      // pontos estimados/confirmados
+  confirmedPoints   Int?     // pontos confirmados pelo bordador
+  colorCount        Int      // número de cores
+  complexity        EmbroideryComplexity @default(MEDIUM)
+  stitchTypes       String?  // JSON: ["cetim", "preenchimento", "corrido"]
+
+  // Imagem
+  imageUrl    String?  // URL do arquivo armazenado
+  imageBase64 String?  // miniatura base64 para preview
+
+  // Custos
+  programCost     Float?   // custo de programação/digitação (apenas em bordados novos)
+  applicationCost Float    // custo de aplicação por peça
+  pricePerK       Float    @default(0.90) // R$/1000 pontos usado
+
+  // IA Analysis
+  aiAnalysis      String?  // JSON com resultado da análise do Vision
+  aiConfidence    Float?   // 0-1 confiança da estimativa da IA
+
+  // Status
+  isConfirmed     Boolean  @default(false) // confirmado pelo bordador
+  isReference     Boolean  @default(true)  // disponível como referência para novos
+
+  createdById  Int
+  createdBy    User     @relation(fields: [createdById], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  quotes  Quote[]
+
+  @@map("embroidery_jobs")
+}
+
+enum EmbroideryComplexity {
+  SIMPLE     // logos simples, texto grande
+  MEDIUM     // logos com detalhes moderados, texto médio
+  COMPLEX    // arte detalhada, gradientes, textos finos
+  VERY_COMPLEX // alta densidade, sombreamento, muitas cores
+}
+
+// ─── Cache do ERP ─────────────────────────────────────────────────────────────
+
+model ErpCache {
+  key       String   @id
+  data      String   // JSON serializado
+  fetchedAt DateTime @default(now())
+
+  @@map("erp_cache")
+}

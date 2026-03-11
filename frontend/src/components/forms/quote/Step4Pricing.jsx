@@ -1,35 +1,45 @@
 import { useMemo } from 'react';
 
 const calcPricing = (data) => {
-  const fabricCost = data.fabricPrice * data.fabricConsumption * (1 + data.cuttingWaste / 100);
-  const totalMaterial = fabricCost + (data.accessoriesCost || 0);
-  const complexity = { LOW: 1.0, MEDIUM: 1.15, HIGH: 1.35 }[data.complexity] || 1.0;
-  const totalProcess = ((data.baseProcessCost || 0) + (data.embroideryCost || 0) + (data.printCost || 0)) * complexity;
-  const urgency = data.urgent ? (totalMaterial + totalProcess) * 0.15 : 0;
-  const costPerPiece = totalMaterial + totalProcess + urgency;
+  const totalMaterial = (data.materials || [])
+    .filter(m => !m.removed)
+    .reduce((sum, m) => sum + (m.priceOverride ?? m.unitPrice ?? 0) * (m.consumption ?? 1), 0);
 
-  let effectiveMarkup = data.markup || 0;
-  if (data.quantity >= 500) effectiveMarkup = Math.max(effectiveMarkup * 0.8, 15);
-  else if (data.quantity >= 100) effectiveMarkup = Math.max(effectiveMarkup * 0.9, 20);
+  const totalFabrication = (data.fabricationItems || [])
+    .reduce((sum, f) => sum + (f.unitCost ?? 0) * (f.quantity ?? 1), 0);
 
-  const priceBeforeDiscount = costPerPiece * (1 + effectiveMarkup / 100);
+  const embroideryCost = data.embroideryCost || 0;
+  const printCost      = data.printCostPerPiece || data.printCost || 0;
+  const subtotal       = totalMaterial + totalFabrication + embroideryCost + printCost;
+  const urgency        = data.urgent ? subtotal * 0.15 : 0;
+  const costPerPiece   = subtotal + urgency;
+
+  // Método divisório ERP: precoVenda = custo × coeficiente
+  // Fallback aditivo: precoVenda = custo × (1 + markup/100)
+  let priceBeforeDiscount;
+  let effectiveMarkup;
+  const coef = data.markupCoeficiente;
+  if (coef && coef > 1) {
+    priceBeforeDiscount = costPerPiece * coef;
+    effectiveMarkup     = (coef - 1) * 100;
+  } else {
+    effectiveMarkup = data.markup || 0;
+    if (data.quantity >= 500) effectiveMarkup = Math.max(effectiveMarkup * 0.8, 15);
+    else if (data.quantity >= 100) effectiveMarkup = Math.max(effectiveMarkup * 0.9, 20);
+    priceBeforeDiscount = costPerPiece * (1 + effectiveMarkup / 100);
+  }
+
   const pricePerPiece = priceBeforeDiscount * (1 - (data.discount || 0) / 100);
-  const margin = costPerPiece > 0 ? ((pricePerPiece - costPerPiece) / pricePerPiece) * 100 : 0;
+  const margin        = costPerPiece > 0 ? ((pricePerPiece - costPerPiece) / pricePerPiece) * 100 : 0;
 
-  return {
-    costPerPiece,
-    pricePerPiece,
-    margin,
-    totalOrderValue: pricePerPiece * data.quantity,
-    effectiveMarkup,
-  };
+  return { totalMaterial, totalFabrication, embroideryCost, printCost, costPerPiece, pricePerPiece, margin, totalOrderValue: pricePerPiece * (data.quantity || 1), effectiveMarkup };
 };
 
 export default function Step4Pricing({ data, update, onNext, onBack }) {
   const pricing = useMemo(() => calcPricing(data), [
-    data.fabricPrice, data.fabricConsumption, data.cuttingWaste, data.accessoriesCost,
-    data.baseProcessCost, data.embroideryCost, data.printCost,
-    data.complexity, data.urgent, data.markup, data.discount, data.quantity
+    data.materials, data.fabricationItems,
+    data.embroideryCost, data.printCostPerPiece, data.printCost,
+    data.urgent, data.markup, data.markupCoeficiente, data.discount, data.quantity,
   ]);
 
   const getMarginColor = (margin) => {
@@ -45,9 +55,56 @@ export default function Step4Pricing({ data, update, onNext, onBack }) {
         <p className="text-sm text-gray-500 mt-0.5">Defina markup e descontos</p>
       </div>
 
+      {/* Markup do ERP */}
+      {data.erpMarkup?.indices?.length > 0 ? (
+        <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-blue-800">
+                Markup ERP: {data.erpMarkup.descricao}
+              </p>
+              <p className="text-xs text-blue-600 mt-0.5">
+                Coeficiente divisório {data.erpMarkup.coeficiente?.toFixed(4)} × custo
+                {' '}= margem de {(100 - 100 / data.erpMarkup.coeficiente).toFixed(1)}% sobre o preço
+              </p>
+            </div>
+            {data.markupSource === 'MANUAL' && (
+              <button
+                type="button"
+                className="text-xs text-blue-600 underline"
+                onClick={() => update({ markupCoeficiente: data.erpMarkup.coeficiente, markupSource: 'ERP' })}
+              >
+                Restaurar ERP
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-1.5 text-xs">
+            {data.erpMarkup.indices.map((idx) => (
+              <div key={idx.codigo} className="flex justify-between bg-white rounded px-2 py-1 border border-blue-100">
+                <span className="text-gray-600 truncate">{idx.descricao}</span>
+                <span className="font-medium text-blue-700 ml-2 shrink-0">{idx.indiceNacional}%</span>
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-3 pt-1 border-t border-blue-200">
+            <span className="text-xs text-blue-700 font-medium">
+              Soma: {data.erpMarkup.somaIndices?.toFixed(2)}%
+            </span>
+            <button
+              type="button"
+              className="text-xs text-gray-500 hover:text-gray-700 underline ml-auto"
+              onClick={() => update({ markupCoeficiente: null, markupSource: 'MANUAL' })}
+            >
+              Substituir por markup manual
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <div className="grid grid-cols-2 gap-4">
+        {(!data.erpMarkup?.indices?.length || data.markupSource === 'MANUAL') && (
         <div>
-          <label className="label">Markup (%)</label>
+          <label className="label">Markup % (manual)</label>
           <input
             type="number"
             step="1"
@@ -55,14 +112,15 @@ export default function Step4Pricing({ data, update, onNext, onBack }) {
             max="500"
             className="input"
             value={data.markup}
-            onChange={(e) => update({ markup: parseFloat(e.target.value) || 0 })}
+            onChange={(e) => update({ markup: parseFloat(e.target.value) || 0, markupSource: 'MANUAL', markupCoeficiente: null })}
           />
-          {data.quantity >= 100 && (
+          {data.quantity >= 100 && !data.markupCoeficiente && (
             <p className="text-xs text-orange-600 mt-1">
-              ⚡ Desconto de volume aplicado: {data.markup.toFixed(0)}% → {pricing.effectiveMarkup.toFixed(0)}%
+              ⚡ Volume: {data.markup}% → {pricing.effectiveMarkup.toFixed(0)}%
             </p>
           )}
         </div>
+        )}
 
         <div>
           <label className="label">Desconto Especial (%)</label>

@@ -1,0 +1,390 @@
+/**
+ * routes/quotes.js
+ * CRUD de orçamentos + máquina de estado de status.
+ */
+
+import { Router } from 'express';
+import prisma from '../config/database.js';
+import { requireAuth, requireRole } from '../middleware/auth.js';
+import { calcularCustoTotal } from '../services/pricingEngine.js';
+
+const router = Router();
+router.use(requireAuth);
+
+// ─── Gera número sequencial do orçamento ──────────────────────────────────────
+async function nextQuoteNumber() {
+  const last = await prisma.quote.findFirst({ orderBy: { id: 'desc' } });
+  const seq  = (last?.id ?? 0) + 1;
+  const year = new Date().getFullYear();
+  return `ORC-${year}-${String(seq).padStart(4, '0')}`;
+}
+
+// ─── GET /api/quotes ──────────────────────────────────────────────────────────
+router.get('/', async (req, res, next) => {
+  try {
+    const { status, search, page = 1, limit = 20 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const where = {};
+    if (status)  where.status = status;
+    if (search)  where.OR = [
+      { clientName:  { contains: search, mode: 'insensitive' } },
+      { reference:   { contains: search, mode: 'insensitive' } },
+      { number:      { contains: search, mode: 'insensitive' } },
+      { productName: { contains: search, mode: 'insensitive' } },
+    ];
+
+    // COMMERCIAL só vê os próprios; APPROVER/ADMIN vê todos
+    if (req.user.role === 'COMMERCIAL') {
+      where.createdBy = req.user.id;
+    }
+
+    const [quotes, total] = await Promise.all([
+      prisma.quote.findMany({
+        where,
+        skip,
+        take: parseInt(limit),
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true, number: true, status: true,
+          clientName: true, clientSegment: true,
+          reference: true, productName: true, quantity: true,
+          pricePerPiece: true, totalOrderValue: true,
+          embroideryStatus: true,
+          createdAt: true, updatedAt: true,
+          user: { select: { name: true } },
+        },
+      }),
+      prisma.quote.count({ where }),
+    ]);
+
+    res.json({ quotes, total, page: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)) });
+  } catch (err) { next(err); }
+});
+
+// ─── GET /api/quotes/stats/summary ───────────────────────────────────────────
+router.get('/stats/summary', async (req, res, next) => {
+  try {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const where = req.user.role === 'COMMERCIAL' ? { createdBy: req.user.id } : {};
+
+    const [total, pending, approved, recentValue] = await Promise.all([
+      prisma.quote.count({ where }),
+      prisma.quote.count({ where: { ...where, status: 'PENDING_APPROVAL' } }),
+      prisma.quote.count({ where: { ...where, status: 'APPROVED' } }),
+      prisma.quote.aggregate({
+        where: { ...where, createdAt: { gte: thirtyDaysAgo }, status: { in: ['APPROVED', 'PENDING_APPROVAL'] } },
+        _sum:  { totalOrderValue: true },
+      }),
+    ]);
+
+    res.json({
+      total,
+      pending,
+      approved,
+      valueLastThirtyDays: recentValue._sum.totalOrderValue ?? 0,
+    });
+  } catch (err) { next(err); }
+});
+
+// ─── GET /api/quotes/:id ──────────────────────────────────────────────────────
+router.get('/:id', async (req, res, next) => {
+  try {
+    const quote = await prisma.quote.findUnique({
+      where: { id: parseInt(req.params.id) },
+      include: {
+        materials:        true,
+        fabricationItems: { include: { manufacturingCost: true } },
+        embroideryJob:    true,
+        approvals:        { include: { user: { select: { name: true, role: true } } }, orderBy: { createdAt: 'desc' } },
+        user:             { select: { name: true, email: true } },
+      },
+    });
+
+    if (!quote) return res.status(404).json({ error: 'Orçamento não encontrado' });
+
+    // COMMERCIAL só acessa os próprios
+    if (req.user.role === 'COMMERCIAL' && quote.createdBy !== req.user.id) {
+      return res.status(403).json({ error: 'Acesso negado' });
+    }
+
+    res.json({ quote });
+  } catch (err) { next(err); }
+});
+
+// ─── POST /api/quotes ─────────────────────────────────────────────────────────
+router.post('/', async (req, res, next) => {
+  try {
+    const body = req.body;
+
+    const number = await nextQuoteNumber();
+
+    // Calcula custo total via pricingEngine
+    const pricing = calcularCustoTotal(body);
+
+    const quote = await prisma.quote.create({
+      data: {
+        number,
+        status:        'DRAFT',
+        clientName:    body.clientName,
+        clientSegment: body.clientSegment || null,
+        reference:     body.reference,
+        productName:   body.productName,
+        itemType:      body.itemType    || null,
+        quantity:      body.quantity,
+        orderType:     body.orderType   || 'RETAIL',
+        urgent:        body.urgent      || false,
+        sizes:         body.sizes       ? JSON.stringify(body.sizes)   : null,
+
+        // Precificação calculada
+        costPerPiece:    pricing.costPerPiece,
+        markupPercent:   body.markupPercent  ?? pricing.markupPercent,
+        markupSource:    body.markupSource   ?? 'ERP',
+        discountPercent: body.discountPercent ?? 0,
+        pricePerPiece:   pricing.pricePerPiece,
+        totalOrderValue: pricing.totalOrderValue,
+        marginPercent:   pricing.marginPercent,
+
+        printType:        body.printType    || null,
+        printWidthCm:     body.printWidthCm || null,
+        printHeightCm:    body.printHeightCm|| null,
+        printColors:      body.printColors  || null,
+        printCostPerPiece: body.printCostPerPiece || null,
+
+        embroideryJobId:  body.embroideryJobId || null,
+        embroideryStatus: body.embroideryStatus || 'NOT_APPLICABLE',
+
+        notes:         body.notes        || null,
+        internalNotes: body.internalNotes|| null,
+        createdBy:     req.user.id,
+
+        // Materiais do BOM
+        materials: body.materials?.length ? {
+          create: body.materials.map((m) => ({
+            erpCode:      m.erpCode,
+            name:         m.name,
+            category:     m.category     || null,
+            unit:         m.unit         || 'un',
+            consumption:  m.consumption,
+            unitPrice:    m.unitPrice,
+            priceOverride: m.priceOverride || null,
+            priceSource:  m.priceOverride ? 'MANUAL' : 'ERP',
+            priceNote:    m.priceNote    || null,
+            erpPriceDate: m.erpPriceDate ? new Date(m.erpPriceDate) : null,
+            isStale:      m.isStale      || false,
+            staleDays:    m.staleDays    || null,
+            costPerPiece: (m.priceOverride ?? m.unitPrice) * m.consumption,
+            addedManually: m.addedManually || false,
+            removed:      m.removed       || false,
+          })),
+        } : undefined,
+
+        // Itens de fabricação
+        fabricationItems: body.fabricationItems?.length ? {
+          create: body.fabricationItems.map((f) => ({
+            manufacturingCostId: f.manufacturingCostId || null,
+            categoria:   f.categoria,
+            descricao:   f.descricao,
+            tierApplied: f.tierApplied || null,
+            unitCost:    f.unitCost,
+            quantity:    f.quantity    || 1,
+            totalCost:   f.unitCost * (f.quantity || 1),
+          })),
+        } : undefined,
+      },
+      include: { materials: true, fabricationItems: true },
+    });
+
+    res.status(201).json({ quote });
+  } catch (err) { next(err); }
+});
+
+// ─── PUT /api/quotes/:id ──────────────────────────────────────────────────────
+router.put('/:id', async (req, res, next) => {
+  try {
+    const id    = parseInt(req.params.id);
+    const quote = await prisma.quote.findUnique({ where: { id } });
+
+    if (!quote) return res.status(404).json({ error: 'Orçamento não encontrado' });
+    if (req.user.role === 'COMMERCIAL' && quote.createdBy !== req.user.id) {
+      return res.status(403).json({ error: 'Acesso negado' });
+    }
+    if (['APPROVED', 'REJECTED'].includes(quote.status)) {
+      return res.status(400).json({ error: 'Orçamento finalizado não pode ser editado' });
+    }
+
+    const body    = req.body;
+    const pricing = calcularCustoTotal(body);
+
+    // Remove materiais e fabricação anteriores e recria
+    await prisma.$transaction([
+      prisma.quoteMaterial.deleteMany({   where: { quoteId: id } }),
+      prisma.quoteFabrication.deleteMany({ where: { quoteId: id } }),
+    ]);
+
+    const updated = await prisma.quote.update({
+      where: { id },
+      data: {
+        clientName:    body.clientName,
+        clientSegment: body.clientSegment || null,
+        productName:   body.productName,
+        itemType:      body.itemType     || null,
+        quantity:      body.quantity,
+        orderType:     body.orderType    || quote.orderType,
+        urgent:        body.urgent       ?? quote.urgent,
+        sizes:         body.sizes        ? JSON.stringify(body.sizes)  : quote.sizes,
+
+        costPerPiece:    pricing.costPerPiece,
+        markupPercent:   body.markupPercent   ?? quote.markupPercent,
+        markupSource:    body.markupSource    ?? quote.markupSource,
+        discountPercent: body.discountPercent ?? quote.discountPercent,
+        pricePerPiece:   pricing.pricePerPiece,
+        totalOrderValue: pricing.totalOrderValue,
+        marginPercent:   pricing.marginPercent,
+
+        printType:        body.printType     ?? quote.printType,
+        printWidthCm:     body.printWidthCm  ?? quote.printWidthCm,
+        printHeightCm:    body.printHeightCm ?? quote.printHeightCm,
+        printColors:      body.printColors   ?? quote.printColors,
+        printCostPerPiece: body.printCostPerPiece ?? quote.printCostPerPiece,
+
+        embroideryJobId:  body.embroideryJobId  ?? quote.embroideryJobId,
+        embroideryStatus: body.embroideryStatus ?? quote.embroideryStatus,
+
+        notes:         body.notes        ?? quote.notes,
+        internalNotes: body.internalNotes?? quote.internalNotes,
+
+        materials: body.materials?.length ? {
+          create: body.materials.map((m) => ({
+            erpCode:      m.erpCode,
+            name:         m.name,
+            category:     m.category    || null,
+            unit:         m.unit        || 'un',
+            consumption:  m.consumption,
+            unitPrice:    m.unitPrice,
+            priceOverride: m.priceOverride || null,
+            priceSource:  m.priceOverride ? 'MANUAL' : 'ERP',
+            priceNote:    m.priceNote   || null,
+            erpPriceDate: m.erpPriceDate ? new Date(m.erpPriceDate) : null,
+            isStale:      m.isStale     || false,
+            staleDays:    m.staleDays   || null,
+            costPerPiece: (m.priceOverride ?? m.unitPrice) * m.consumption,
+            addedManually: m.addedManually || false,
+            removed:      m.removed      || false,
+          })),
+        } : undefined,
+
+        fabricationItems: body.fabricationItems?.length ? {
+          create: body.fabricationItems.map((f) => ({
+            manufacturingCostId: f.manufacturingCostId || null,
+            categoria:   f.categoria,
+            descricao:   f.descricao,
+            tierApplied: f.tierApplied || null,
+            unitCost:    f.unitCost,
+            quantity:    f.quantity    || 1,
+            totalCost:   f.unitCost * (f.quantity || 1),
+          })),
+        } : undefined,
+      },
+      include: { materials: true, fabricationItems: true },
+    });
+
+    res.json({ quote: updated });
+  } catch (err) { next(err); }
+});
+
+// ─── POST /api/quotes/:id/submit ──────────────────────────────────────────────
+router.post('/:id/submit', async (req, res, next) => {
+  try {
+    const id    = parseInt(req.params.id);
+    const quote = await prisma.quote.findUnique({
+      where: { id },
+      include: { materials: true },
+    });
+
+    if (!quote) return res.status(404).json({ error: 'Orçamento não encontrado' });
+    if (req.user.role === 'COMMERCIAL' && quote.createdBy !== req.user.id) {
+      return res.status(403).json({ error: 'Acesso negado' });
+    }
+    if (quote.status !== 'DRAFT' && quote.status !== 'REVISION_REQUESTED') {
+      return res.status(400).json({ error: `Não é possível submeter um orçamento com status "${quote.status}"` });
+    }
+
+    // Bloqueia se ainda houver materiais stale
+    const staleBlocking = quote.materials.filter((m) => m.isStale && !m.priceOverride && !m.removed);
+    if (staleBlocking.length > 0) {
+      return res.status(422).json({
+        error: 'Existem materiais com preço desatualizado. Corrija os preços antes de submeter.',
+        code:  'MATERIALS_STALE',
+        staleItems: staleBlocking.map((m) => ({ name: m.name, staleDays: m.staleDays })),
+      });
+    }
+
+    // Se bordado e ainda não confirmado → vai para AWAITING_EMBROIDERY
+    const nextStatus = (quote.embroideryJobId && quote.embroideryStatus === 'ESTIMATED')
+      ? 'AWAITING_EMBROIDERY'
+      : 'PENDING_APPROVAL';
+
+    const updated = await prisma.quote.update({
+      where: { id },
+      data:  { status: nextStatus },
+    });
+
+    res.json({ quote: updated, nextStatus });
+  } catch (err) { next(err); }
+});
+
+// ─── POST /api/quotes/:id/confirm-embroidery ──────────────────────────────────
+// Bordador confirma o preço do bordado e o orçamento avança
+router.post('/:id/confirm-embroidery', requireRole('ADMIN', 'PRODUCTION'), async (req, res, next) => {
+  try {
+    const id    = parseInt(req.params.id);
+    const { confirmedCost, notes } = req.body;
+
+    const quote = await prisma.quote.findUnique({ where: { id }, include: { embroideryJob: true } });
+    if (!quote) return res.status(404).json({ error: 'Orçamento não encontrado' });
+    if (quote.status !== 'AWAITING_EMBROIDERY') {
+      return res.status(400).json({ error: 'Orçamento não está aguardando bordado' });
+    }
+
+    // Atualiza job de bordado se custo confirmado for diferente
+    if (quote.embroideryJobId && confirmedCost !== undefined) {
+      await prisma.embroideryJob.update({
+        where: { id: quote.embroideryJobId },
+        data:  { applicationCost: confirmedCost, isConfirmed: true },
+      });
+    }
+
+    const updated = await prisma.quote.update({
+      where: { id },
+      data:  {
+        embroideryStatus: 'CONFIRMED',
+        status:           'PENDING_APPROVAL',
+        internalNotes:    notes ? `${quote.internalNotes || ''}\n[Bordado confirmado]: ${notes}` : quote.internalNotes,
+      },
+    });
+
+    res.json({ quote: updated });
+  } catch (err) { next(err); }
+});
+
+// ─── DELETE /api/quotes/:id ───────────────────────────────────────────────────
+router.delete('/:id', async (req, res, next) => {
+  try {
+    const id    = parseInt(req.params.id);
+    const quote = await prisma.quote.findUnique({ where: { id } });
+
+    if (!quote) return res.status(404).json({ error: 'Orçamento não encontrado' });
+    if (req.user.role === 'COMMERCIAL' && quote.createdBy !== req.user.id) {
+      return res.status(403).json({ error: 'Acesso negado' });
+    }
+    if (quote.status === 'APPROVED') {
+      return res.status(400).json({ error: 'Orçamento aprovado não pode ser excluído' });
+    }
+
+    await prisma.quote.delete({ where: { id } });
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+export default router;

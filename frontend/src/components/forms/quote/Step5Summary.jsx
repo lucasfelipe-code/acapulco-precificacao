@@ -3,19 +3,35 @@ import { Send, Save, FileDown } from 'lucide-react';
 import { formatCurrency } from '../../../utils/format';
 
 const calcPricing = (data) => {
-  const fabricCost = data.fabricPrice * data.fabricConsumption * (1 + data.cuttingWaste / 100);
-  const totalMaterial = fabricCost + (data.accessoriesCost || 0);
-  const complexity = { LOW: 1.0, MEDIUM: 1.15, HIGH: 1.35 }[data.complexity] || 1.0;
-  const totalProcess = ((data.baseProcessCost || 0) + (data.embroideryCost || 0) + (data.printCost || 0)) * complexity;
-  const urgency = data.urgent ? (totalMaterial + totalProcess) * 0.15 : 0;
-  const costPerPiece = totalMaterial + totalProcess + urgency;
-  let effectiveMarkup = data.markup || 0;
-  if (data.quantity >= 500) effectiveMarkup = Math.max(effectiveMarkup * 0.8, 15);
-  else if (data.quantity >= 100) effectiveMarkup = Math.max(effectiveMarkup * 0.9, 20);
-  const priceBeforeDiscount = costPerPiece * (1 + effectiveMarkup / 100);
+  const totalMaterial = (data.materials || [])
+    .filter(m => !m.removed)
+    .reduce((sum, m) => sum + (m.priceOverride ?? m.unitPrice ?? 0) * (m.consumption ?? 1), 0);
+
+  const totalFabrication = (data.fabricationItems || [])
+    .reduce((sum, f) => sum + (f.unitCost ?? 0) * (f.quantity ?? 1), 0);
+
+  const embroideryCost = data.embroideryCost || 0;
+  const printCost      = data.printCostPerPiece || data.printCost || 0;
+  const totalProcess   = totalFabrication + embroideryCost + printCost;
+  const subtotal       = totalMaterial + totalProcess;
+  const urgency        = data.urgent ? subtotal * 0.15 : 0;
+  const costPerPiece   = subtotal + urgency;
+
+  let priceBeforeDiscount;
+  let effectiveMarkup;
+  const coef = data.markupCoeficiente;
+  if (coef && coef > 1) {
+    priceBeforeDiscount = costPerPiece * coef;
+    effectiveMarkup     = (coef - 1) * 100;
+  } else {
+    effectiveMarkup = data.markup || 0;
+    if (data.quantity >= 500) effectiveMarkup = Math.max(effectiveMarkup * 0.8, 15);
+    else if (data.quantity >= 100) effectiveMarkup = Math.max(effectiveMarkup * 0.9, 20);
+    priceBeforeDiscount = costPerPiece * (1 + effectiveMarkup / 100);
+  }
   const pricePerPiece = priceBeforeDiscount * (1 - (data.discount || 0) / 100);
   const margin = costPerPiece > 0 ? ((pricePerPiece - costPerPiece) / pricePerPiece) * 100 : 0;
-  return { costPerPiece, pricePerPiece, margin, totalOrderValue: pricePerPiece * data.quantity, totalMaterial, totalProcess };
+  return { costPerPiece, pricePerPiece, margin, totalOrderValue: pricePerPiece * (data.quantity || 1), totalMaterial, totalProcess, effectiveMarkup };
 };
 
 const Row = ({ label, value, highlight }) => (
@@ -25,7 +41,6 @@ const Row = ({ label, value, highlight }) => (
   </div>
 );
 
-const complexityLabel = { LOW: 'Baixa', MEDIUM: 'Média', HIGH: 'Alta' };
 
 export default function Step5Summary({ data, onBack, saving, onSaveDraft, onSubmit }) {
   const pricing = useMemo(() => calcPricing(data), [data]);
@@ -64,32 +79,27 @@ export default function Step5Summary({ data, onBack, saving, onSaveDraft, onSubm
 
         {/* Materials */}
         <div className="p-4 bg-gray-50 rounded-xl">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Matéria-Prima</p>
-          <Row label="Tecido" value={data.fabricType || '—'} />
-          <Row label="Preço tecido" value={`R$ ${(data.fabricPrice || 0).toFixed(2)}/m`} />
-          <Row label="Consumo" value={`${data.fabricConsumption || 0}m/peça`} />
-          <Row label="Desperdício" value={`${data.cuttingWaste || 0}%`} />
-          <Row label="Aviamentos" value={formatCurrency(data.accessoriesCost || 0)} />
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Matéria-Prima ({(data.materials || []).filter(m => !m.removed).length} itens)</p>
+          {(data.materials || []).filter(m => !m.removed).slice(0, 5).map((m) => (
+            <Row key={m.erpCode} label={m.name} value={formatCurrency((m.priceOverride ?? m.unitPrice) * m.consumption)} />
+          ))}
+          {(data.materials || []).filter(m => !m.removed).length > 5 && (
+            <p className="text-xs text-gray-400 py-1">+ {(data.materials || []).filter(m => !m.removed).length - 5} outros materiais</p>
+          )}
           <Row label="Total Matéria-Prima" value={formatCurrency(pricing.totalMaterial)} highlight />
         </div>
 
         {/* Processes */}
         <div className="p-4 bg-gray-50 rounded-xl">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Processos</p>
-          <Row label="Processos" value={data.processes.join(', ') || '—'} />
-          <Row label="Custo base" value={formatCurrency(data.baseProcessCost || 0)} />
-          <Row label="Complexidade" value={complexityLabel[data.complexity] || '—'} />
-          {data.hasEmbroidery && (
-            <>
-              <Row label="Bordado (pontos)" value={(data.embroideryPoints || 0).toLocaleString('pt-BR')} />
-              <Row label="Custo bordado" value={formatCurrency(data.embroideryCost || 0)} />
-            </>
+          {(data.fabricationItems || []).map((f, i) => (
+            <Row key={i} label={f.name || f.descricao} value={formatCurrency((f.unitCost ?? 0) * (f.quantity ?? 1))} />
+          ))}
+          {data.embroideryCost > 0 && (
+            <Row label={`Bordado (~${(data.embroideryPoints || 0).toLocaleString('pt-BR')} pts)`} value={formatCurrency(data.embroideryCost)} />
           )}
-          {data.hasPrint && (
-            <>
-              <Row label="Estampa" value={`${data.printWidth}×${data.printHeight}cm, ${data.printColors} cor(es)`} />
-              <Row label="Custo estampa" value={formatCurrency(data.printCost || 0)} />
-            </>
+          {(data.printCostPerPiece || data.printCost) > 0 && (
+            <Row label="Estampa" value={formatCurrency(data.printCostPerPiece || data.printCost)} />
           )}
           <Row label="Total Processos" value={formatCurrency(pricing.totalProcess)} highlight />
         </div>
@@ -98,7 +108,10 @@ export default function Step5Summary({ data, onBack, saving, onSaveDraft, onSubm
         <div className="p-4 bg-gradient-to-br from-orange-50 to-amber-50 rounded-xl border border-orange-200">
           <p className="text-xs font-semibold text-orange-700 uppercase tracking-wide mb-3">Precificação</p>
           <Row label="Custo por peça" value={formatCurrency(pricing.costPerPiece)} />
-          <Row label="Markup" value={`${data.markup}%`} />
+          {data.markupCoeficiente
+            ? <Row label={`Markup ERP (coef. ${data.markupCoeficiente.toFixed(2)}×)`} value={`${data.erpMarkup?.descricao || ''} — ${pricing.effectiveMarkup.toFixed(1)}% s/custo`} />
+            : <Row label="Markup" value={`${pricing.effectiveMarkup.toFixed(0)}%`} />
+          }
           <Row label="Desconto" value={`${data.discount || 0}%`} />
           <Row label="Preço por peça" value={formatCurrency(pricing.pricePerPiece)} highlight />
           <Row label="Margem estimada" value={`${pricing.margin.toFixed(1)}%`} highlight />

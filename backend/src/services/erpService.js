@@ -1,24 +1,33 @@
 /**
  * erpService.js
  * Integração com Sisplan via Cloudflare Tunnel
- * Base URL: https://erp.lourencosolucoesengenharia.com.br  →  http://localhost:10005
  *
- * Endpoints reais (API Sisplan v2.0.0):
- *   POST /login                       → JWT token
- *   GET  /produto/{codigo}            → produto por referência
- *   GET  /consumo/{codigo}            → consumo de materiais do produto
- *   GET  /precomaterial/{codigo}      → preço do material + campo `data` (usado p/ guard 15 dias)
- *   GET  /formacao-preco?produto=REF  → formação de preço estruturada
- *   GET  /combinacao/{codigo}         → grades/cores/tamanhos do produto
- *   GET  /markup/{codigo}             → markup configurado
- *   GET  /tabela-preco/{codigo}       → tabela de preço
- *   GET  /preco/{tabela}/{codigo}     → preço em tabela específica
+ * URL pública (tunnel): https://erp.lourencosolucoesengenharia.com.br/api/sisplan
+ *   → roteia para: IPEXTERNO:PORTA/api/sisplan (interno)
+ *
+ * Autenticação CONFIRMADA (11/03/2026):
+ *   POST /login  — credenciais nos HEADERS: username / password  (não no body)
+ *   Resposta: { access_token, expires_in: 3600, token_type: "Bearer" }
+ *
+ * Endpoints Sisplan v2.0.0:
+ *   GET  /produto/{codigo}             → produto por referência
+ *   GET  /consumo/{codigo}             → consumo de materiais do produto
+ *   GET  /precomaterial/{codigo}       → preço do material + campo `data` (guard 15 dias)
+ *   GET  /formacao-preco?produto=REF   → formação de preço estruturada
+ *   GET  /combinacao/{codigo}          → grades/cores/tamanhos do produto
+ *   GET  /composicao-do-produto/{cod}  → composição do produto
+ *   GET  /markup/{codigo}              → markup configurado
+ *   GET  /tabela-preco/{codigo}        → tabela de preço
+ *   GET  /preco/{tabela}/{codigo}      → preço em tabela específica
+ *
+ * Credenciais: API.COUTOFLOW / @123COUTOFLOW
  */
 
 import axios from 'axios';
 import prisma from '../config/database.js';
 
-const ERP_BASE_URL = process.env.ERP_BASE_URL || 'https://erp.lourencosolucoesengenharia.com.br';
+// ERP_BASE_URL já inclui /api/sisplan conforme documentação Sisplan
+const ERP_BASE_URL = process.env.ERP_BASE_URL || 'https://erp.lourencosolucoesengenharia.com.br/api/sisplan';
 const ERP_LOGIN    = process.env.ERP_LOGIN    || '';
 const ERP_SENHA    = process.env.ERP_SENHA    || '';
 
@@ -26,18 +35,22 @@ const ERP_SENHA    = process.env.ERP_SENHA    || '';
 let _token = null;
 let _tokenExpiry = null;
 
-async function getToken() {
+export async function getToken() {
   if (_token && _tokenExpiry && Date.now() < _tokenExpiry) return _token;
 
-  const res = await axios.post(`${ERP_BASE_URL}/login`, {
-    login: ERP_LOGIN,
-    senha: ERP_SENHA,
+  // Sisplan: POST /login com credenciais nos HEADERS (não no body)
+  // Resposta: { access_token, expires_in, token_type, documentation }
+  const res = await axios.post(`${ERP_BASE_URL}/login`, null, {
+    headers: {
+      username: ERP_LOGIN,
+      password: ERP_SENHA,
+    },
   });
 
-  // Sisplan retorna { token: "...", expiracao: "..." } ou similar
-  _token = res.data.token ?? res.data.accessToken ?? res.data;
-  // Renova 5 min antes de expirar (assume 1h de vida)
-  _tokenExpiry = Date.now() + (55 * 60 * 1000);
+  _token = res.data.access_token;
+  // expires_in vem em segundos (3600 = 1h) — renova 5 min antes
+  const expiresMs = ((res.data.expires_in ?? 3600) - 300) * 1000;
+  _tokenExpiry    = Date.now() + expiresMs;
   return _token;
 }
 
@@ -80,6 +93,30 @@ async function toCache(key, data) {
 }
 
 // ─── API pública ──────────────────────────────────────────────────────────────
+
+/**
+ * Retorna lista simplificada de todos os produtos ativos do catálogo Sisplan.
+ * Cache de 1 hora (lista muda raramente — usa o mesmo mecanismo de 15 dias).
+ */
+export async function getProdutosList() {
+  const cacheKey = 'produtos:lista';
+  const cached   = await fromCache(cacheKey);
+  if (cached) return cached;
+
+  const data = await erpGet('/produto');
+  const list = (Array.isArray(data) ? data : [])
+    .filter(p => p.ativo && p.codigo)
+    .map(p => ({
+      codigo:     p.codigo,
+      descricao:  p.descricao,
+      descricao2: p.descricao2 || null,
+      grupo:      p.grupo?.descricao || null,
+      unidade:    p.unidade          || 'PC',
+    }));
+
+  await toCache(cacheKey, list);
+  return list;
+}
 
 /**
  * Busca produto por referência (campo `codigo` no Sisplan).
@@ -199,45 +236,121 @@ export async function getPrecoNaTabela(codigoTabela, codigoProduto) {
   return erpGet(`/preco/${codigoTabela}/${codigoProduto}`);
 }
 
+// ─── Delphi null date (1899-12-30) = campo não preenchido no Sisplan ────────
+const DELPHI_NULL_PREFIX = '1899-12-30';
+const FRESHNESS_MS       = 15 * 24 * 60 * 60 * 1000;
+
+function isMaterialDateStale(dateStr) {
+  if (!dateStr)                              return true;
+  if (dateStr.startsWith(DELPHI_NULL_PREFIX)) return true; // nunca atualizado
+  return (Date.now() - new Date(dateStr).getTime()) > FRESHNESS_MS;
+}
+
+function staleDaysFrom(dateStr) {
+  if (!dateStr || dateStr.startsWith(DELPHI_NULL_PREFIX)) return 999;
+  return Math.floor((Date.now() - new Date(dateStr).getTime()) / (1000 * 60 * 60 * 24));
+}
+
 /**
- * Busca resumida completa para o wizard de orçamento.
- * Retorna produto + consumo + preços dos materiais em paralelo.
- * Bloqueia se qualquer dado > 15 dias.
+ * Busca completa para o wizard de orçamento usando /formacao-preco como fonte primária.
+ * Esse endpoint do Sisplan retorna BOM completo + custos de processo já calculados.
+ *
+ * Estrutura retornada:
+ *   produto         — dados do produto (do cache ou /produto/{ref})
+ *   formacao        — resposta bruta do /formacao-preco
+ *   materials       — itens abreviado="C" (materiais/tecidos/aviamentos) com staleness
+ *   fabricationItems — itens abreviado="M" (custos de processo: Costura, Corte, etc.)
+ *   markup          — { codigo, descricao } do ERP
+ *   precoVenda      — preço de venda atual no ERP
  */
 export async function getDadosProdutoParaOrcamento(referencia, forceRefresh = false) {
-  const produto = await getProdutoByCodigo(referencia, forceRefresh);
+  // /formacao-preco é a fonte principal — retorna tudo em uma chamada
+  const formacao = await getFormacaoPreco(referencia);
 
-  let consumos = [];
-  let precosMateria = [];
-  let composicao = null;
-
+  // Produto complementar (dados cadastrais) — usa cache de 15 dias
+  let produto = null;
   try {
-    consumos = await getConsumoProduto(referencia);
-    if (!Array.isArray(consumos)) consumos = [consumos];
-
-    // Para cada insumo, busca preço — em paralelo
-    precosMateria = await Promise.allSettled(
-      consumos
-        .filter(c => c.insumo)
-        .map(c => getPrecoMaterial(c.insumo).then(p => ({ ...p, consumo: c.consumo, setor: c.setor })))
-    );
-
-    composicao = await getComposicaoProduto(referencia);
+    produto = await getProdutoByCodigo(referencia, forceRefresh);
   } catch (e) {
-    if (e.code === 'ERP_STALE' || e.code === 'MAT_STALE') throw e;
-    // outros erros: retorna o que tiver
-    console.warn(`[ERP] Aviso ao buscar consumo/preços de ${referencia}:`, e.message);
+    if (e.code === 'ERP_STALE') throw e;
+    console.warn(`[ERP] Aviso ao buscar produto ${referencia}:`, e.message);
+  }
+
+  // Itens da formação de preço (array principal)
+  const itens = Array.isArray(formacao.itens)
+    ? formacao.itens
+    : Array.isArray(formacao)
+      ? formacao
+      : [];
+
+  // ─── Materiais (abreviado = "C") ───────────────────────────────────────────
+  const materials = itens
+    .filter(item => item.abreviado === 'C')
+    .map(item => {
+      const dateStr   = item.dataAtualizacao || item.data || null;
+      const stale     = isMaterialDateStale(dateStr);
+      const staleDays = stale ? staleDaysFrom(dateStr) : null;
+
+      return {
+        erpCode:     item.referencia?.codigo  || item.codigo  || null,
+        name:        item.referencia?.descricao || item.descricao || item.nome || 'Material',
+        // codigoImpressao: "9"=tecido principal, "2"=acessório, "3"=embalagem
+        category:    item.codigoImpressao    || null,
+        unit:        item.unidade            || 'un',
+        consumption: parseFloat(item.quantidade) || 1,
+        unitPrice:   parseFloat(item.custo)  || 0,
+        costPerPiece:parseFloat(item.valor)  || parseFloat(item.custo) * (parseFloat(item.quantidade) || 1) || 0,
+        erpPriceDate: (!dateStr || dateStr.startsWith(DELPHI_NULL_PREFIX)) ? null : new Date(dateStr),
+        isStale:     stale,
+        staleDays,
+        raw:         item,
+      };
+    });
+
+  // ─── Custos de processo (abreviado = "M") ──────────────────────────────────
+  const fabricationItems = itens
+    .filter(item => item.abreviado === 'M')
+    .map(item => ({
+      erpCode:   item.referencia?.codigo   || item.codigo  || null,
+      name:      item.referencia?.descricao || item.descricao || 'Processo',
+      quantity:  parseFloat(item.quantidade) || 1,
+      unitCost:  parseFloat(item.custo)    || 0,
+      totalCost: parseFloat(item.valor)    || parseFloat(item.custo) || 0,
+      raw:       item,
+    }));
+
+  // ─── Markup com índices detalhados do ERP ─────────────────────────────────
+  // O markup do Sisplan é divisório: precoVenda = custo / (1 - soma_indices/100)
+  // Buscamos os índices para replicar o cálculo localmente com preços atualizados.
+  let markupDetalhado = null;
+  if (formacao.markup?.codigo) {
+    try {
+      const mkRaw = await getMarkup(formacao.markup.codigo);
+      const indices = Array.isArray(mkRaw.indices) ? mkRaw.indices : [];
+      const somaIndices = indices.reduce((s, i) => s + (parseFloat(i.indiceNacional) || 0), 0);
+      const coeficiente = somaIndices < 100 ? 1 / (1 - somaIndices / 100) : null;
+      markupDetalhado = {
+        codigo:       mkRaw.codigo,
+        descricao:    mkRaw.descricao,
+        indices,
+        somaIndices:  parseFloat(somaIndices.toFixed(4)),
+        coeficiente:  coeficiente ? parseFloat(coeficiente.toFixed(6)) : null,
+      };
+    } catch (e) {
+      console.warn(`[ERP] Não foi possível buscar índices do markup ${formacao.markup.codigo}:`, e.message);
+    }
   }
 
   return {
-    produto,
-    consumos,
-    composicao,
-    precosMateria: precosMateria
-      .filter(r => r.status === 'fulfilled')
-      .map(r => r.value),
-    errosMateria: precosMateria
-      .filter(r => r.status === 'rejected')
-      .map(r => r.reason?.message),
+    produto:         produto || { referencia },
+    formacao,
+    materials,
+    fabricationItems,
+    markup:          markupDetalhado || formacao.markup || null,
+    precoVenda:      formacao.precoVenda ?? null,
+    // Campos legados
+    consumos:        materials,
+    precosMateria:   materials,
+    errosMateria:    [],
   };
 }

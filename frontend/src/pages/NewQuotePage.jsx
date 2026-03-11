@@ -22,46 +22,48 @@ export default function NewQuotePage() {
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
   const [formData, setFormData] = useState({
-    // Step 1
-    clientName: '',
-    clientSegment: '',
-    reference: '',
-    productName: '',
-    itemType: '',
-    quantity: 1,
-    urgent: false,
-    orderType: 'RETAIL',
-    variations: [],
+    // Step 1 — dados do pedido
+    clientId:       null,
+    clientName:     '',
+    clientSegment:  '',
+    clientCnpj:     null,
+    reference:      '',
+    productName:    '',
+    itemType:       '',
+    quantity:       1,
+    urgent:         false,
+    orderType:      'RETAIL',
+    sizes:          [],
     erpProductData: null,
-    erpFetchedAt: null,
+    erpMarkup:         null,
+    markupCoeficiente: null,
+    markupSource:      'MANUAL',
+    erpSalePrice:      null,
+    hasStale:          false,
 
-    // Step 2
-    fabricType: '',
-    fabricPrice: 0,
-    fabricConsumption: 0,
-    cuttingWaste: 8,
-    accessoriesCost: 0,
+    // Step 2 — matéria-prima (populado ao buscar produto no ERP)
+    materials: [],
 
-    // Step 3
-    processes: [],
-    baseProcessCost: 0,
-    complexity: 'LOW',
-    hasEmbroidery: false,
-    embroideryPoints: 0,
+    // Step 3 — processos (fabricação do ERP + bordado + estampa)
+    fabricationItems:    [],
+    embroideryPoints:    0,
     embroideryPricePerK: 0.9,
-    embroideryCost: 0,
-    embroideryImageUrl: '',
-    hasPrint: false,
-    printWidth: 0,
-    printHeight: 0,
-    printColors: 1,
-    printCost: 0,
+    embroideryCost:      0,
+    embroideryStatus:    'NOT_APPLICABLE',
+    embroideryJobId:     null,
+    hasPrint:            false,
+    printType:           null,
+    printWidthCm:        0,
+    printHeightCm:       0,
+    printColors:         1,
+    printCost:           0,
+    printCostPerPiece:   0,
 
-    // Step 4
-    markup: 65,
-    discount: 0,
+    // Step 4 — precificação
+    markup:        65,
+    markupSource:  'MANUAL',
+    discount:      0,
 
-    // Notes
     notes: '',
   });
 
