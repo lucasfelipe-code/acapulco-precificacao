@@ -18,8 +18,19 @@ const PORT = process.env.PORT || 3001;
 
 // ─── Security ─────────────────────────────────────────────────────────────────
 app.use(helmet());
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  'http://localhost:5173',
+].filter(Boolean);
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: (origin, cb) => {
+    if (!origin || allowedOrigins.some(o => origin === o || origin.endsWith('.vercel.app'))) {
+      cb(null, true);
+    } else {
+      cb(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
 }));
 
