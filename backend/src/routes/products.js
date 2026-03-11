@@ -160,6 +160,20 @@ router.get('/:referencia/formacao-preco', async (req, res, next) => {
 });
 
 /**
+ * POST /api/products/cache/clear
+ * Limpa o cache da lista de produtos — forçar recarga do ERP.
+ */
+router.post('/cache/clear', async (_req, res, next) => {
+  try {
+    const { default: prisma } = await import('../config/database.js');
+    await prisma.erpCache.deleteMany({ where: { key: 'produtos:lista' } });
+    res.json({ ok: true, message: 'Cache de produtos limpo — próxima busca recarregará do ERP' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
  * GET /api/products/erp/status
  * Verifica conectividade com o ERP.
  */
