@@ -248,8 +248,8 @@ const CATALOG_TTL_MS  = 4 * 60 * 60 * 1000; // 4 horas
 export async function getMateriaisCatalog() {
   if (_materialCatalog && Date.now() < _catalogExpiry) return _materialCatalog;
 
-  // /precomaterial sem filtro retorna todos os materiais com preço e data
-  const data = await erpGet('/precomaterial', { limit: 500 });
+  // /material suporta ativo + limit (ao contrário de /precomaterial que requer codigo)
+  const data = await erpGet('/material', { ativo: 'true', limit: 500 });
   _materialCatalog = Array.isArray(data) ? data : [];
   _catalogExpiry   = Date.now() + CATALOG_TTL_MS;
   return _materialCatalog;

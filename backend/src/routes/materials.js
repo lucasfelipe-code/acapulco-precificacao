@@ -32,16 +32,17 @@ function staleDays(dateStr) {
 }
 
 function mapMaterial(m, similarity = null) {
-  const stale = isStale(m.data);
+  // /material schema: grupo é objeto { codigo, descricao }; preço em precoMedio
+  // Não retorna campo `data` de preço — marca isStale=true para forçar verificação ao adicionar
   return {
-    codigo:     m.codigo,
-    descricao:  m.descricao   || '',
-    grupo:      m.descricaoGrupo || null,
-    unidade:    m.unidade     || 'un',
-    preco:      parseFloat(m.preco1) || parseFloat(m.precoCompra) || 0,
-    data:       (!m.data || m.data.startsWith(DELPHI_NULL)) ? null : m.data,
-    isStale:    stale,
-    staleDays:  stale ? staleDays(m.data) : null,
+    codigo:    m.codigo,
+    descricao: m.descricao || '',
+    grupo:     m.grupo?.descricao || null,
+    unidade:   m.unidade || 'un',
+    preco:     parseFloat(m.precoMedio) || 0,
+    data:      null,
+    isStale:   true,   // preço médio — vendedor deve verificar ao adicionar
+    staleDays: null,
     ...(similarity !== null && { similarity }),
   };
 }
