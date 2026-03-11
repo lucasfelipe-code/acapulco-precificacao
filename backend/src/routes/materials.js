@@ -18,6 +18,7 @@
 import { Router } from 'express';
 import OpenAI from 'openai';
 import { requireAuth } from '../middleware/auth.js';
+import prisma from '../config/database.js';
 import {
   getMateriaisCatalog,
   clearMateriaisCatalogCache,
@@ -252,36 +253,45 @@ router.get('/stale-report', async (req, res, next) => {
     const precoMap = {};
     precos.forEach(p => { precoMap[p.codigo] = p; });
 
+    // Carrega overrides salvos pelo comprador
+    const overrides = await prisma.materialPriceOverride.findMany();
+    const overrideMap = {};
+    overrides.forEach(o => { overrideMap[o.codigo] = o; });
+
     const staleItems = catalog
       .map(m => {
         const p      = precoMap[m.codigo];
         const dataNF = p?.data && !p.data.startsWith('1899-12-30') ? p.data : null;
         const days   = staleDays(dataNF ? dataNF : null);
         const stale  = !dataNF || (Date.now() - new Date(dataNF).getTime()) > 15 * 24 * 60 * 60 * 1000;
+        const ov     = overrideMap[m.codigo];
 
         return {
-          codigo:    m.codigo,
-          descricao: m.descricao,
-          grupo:     m.grupo?.descricao || '',
-          unidade:   m.unidade || 'un',
-          preco:     parseFloat(p?.preco1) || parseFloat(p?.precoCompra) || parseFloat(m.precoMedio) || 0,
-          data:      dataNF,
-          staleDays: days,
-          isStale:   stale,
+          codigo:       m.codigo,
+          descricao:    m.descricao,
+          grupo:        m.grupo?.descricao || '',
+          unidade:      m.unidade || 'un',
+          preco:        parseFloat(p?.preco1) || parseFloat(p?.precoCompra) || parseFloat(m.precoMedio) || 0,
+          data:         dataNF,
+          staleDays:    days,
+          isStale:      stale,
+          novoPreco:    ov?.novoPreco ?? null,
+          nota:         ov?.nota ?? null,
+          overrideAt:   ov?.updatedAt ?? null,
         };
       })
       .filter(m => m.isStale)
       .sort((a, b) => b.staleDays - a.staleDays);
 
-    // Cabeçalho CSV se solicitado
+    // CSV se solicitado
     if (req.query.format === 'csv') {
-      const header = 'Código,Descrição,Grupo,Unidade,Preço Atual,Data Última NF,Dias Sem Atualização\n';
+      const header = 'Código,Descrição,Grupo,Unidade,Preço ERP,Preço Temporário,Data Última NF,Dias Sem Atualização\n';
       const rows   = staleItems.map(m =>
-        `${m.codigo},"${m.descricao}","${m.grupo}",${m.unidade},${m.preco.toFixed(2)},${m.data || 'nunca'},${m.staleDays}`
+        `${m.codigo},"${m.descricao}","${m.grupo}",${m.unidade},${m.preco.toFixed(2)},${m.novoPreco != null ? m.novoPreco.toFixed(2) : ''},${m.data || 'nunca'},${m.staleDays}`
       ).join('\n');
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="materiais-desatualizados-${new Date().toISOString().slice(0,10)}.csv"`);
-      return res.send('\uFEFF' + header + rows); // BOM para Excel
+      return res.send('\uFEFF' + header + rows);
     }
 
     res.json({ total: staleItems.length, items: staleItems });
@@ -297,20 +307,46 @@ router.get('/stale-report', async (req, res, next) => {
  */
 router.post('/price-update', async (req, res, next) => {
   try {
-    const { updates } = req.body; // [{ codigo, novoPreco, nota? }]
+    const { updates } = req.body; // [{ codigo, descricao, erpPreco, novoPreco, nota? }]
     if (!Array.isArray(updates) || !updates.length) {
       return res.status(400).json({ error: 'updates deve ser um array não vazio' });
     }
 
-    // Por ora, invalida o cache para forçar nova leitura do ERP
-    // (quando o ERP for atualizado pelo Comprador no Sisplan)
-    clearMateriaisCatalogCache();
+    // Upsert de cada override no banco
+    await Promise.all(updates.map(u =>
+      prisma.materialPriceOverride.upsert({
+        where:  { codigo: u.codigo },
+        create: {
+          codigo:    u.codigo,
+          descricao: u.descricao || '',
+          erpPreco:  parseFloat(u.erpPreco)  || 0,
+          novoPreco: parseFloat(u.novoPreco) || 0,
+          nota:      u.nota || null,
+          updatedBy: req.user.id,
+        },
+        update: {
+          novoPreco: parseFloat(u.novoPreco) || 0,
+          nota:      u.nota || null,
+          erpPreco:  parseFloat(u.erpPreco)  || 0,
+          updatedBy: req.user.id,
+        },
+      })
+    ));
 
-    res.json({
-      ok:      true,
-      message: `${updates.length} material(is) recebido(s). Cache do catálogo limpo — próxima busca carregará preços atualizados do ERP.`,
-      updates: updates.length,
-    });
+    res.json({ ok: true, saved: updates.length });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * DELETE /api/materials/price-override/:codigo
+ * Remove override — preço volta ao ERP.
+ */
+router.delete('/price-override/:codigo', async (req, res, next) => {
+  try {
+    await prisma.materialPriceOverride.deleteMany({ where: { codigo: req.params.codigo } });
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }

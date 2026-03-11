@@ -102,10 +102,11 @@ export const usersAPI = {
 
 // ─── Preços / Comprador ───────────────────────────────────────────────────
 export const pricesAPI = {
-  staleReport:  (format) => api.get('/materials/stale-report', { params: format ? { format } : {} }),
-  staleCSV:     ()       => api.get('/materials/stale-report', { params: { format: 'csv' }, responseType: 'blob' }),
-  priceUpdate:  (updates) => api.post('/materials/price-update', { updates }),
-  refreshCache: ()        => api.post('/materials/catalog/refresh'),
+  staleReport:    ()        => api.get('/materials/stale-report'),
+  staleCSV:       ()        => api.get('/materials/stale-report', { params: { format: 'csv' }, responseType: 'blob' }),
+  priceUpdate:    (updates) => api.post('/materials/price-update', { updates }),
+  removeOverride: (codigo)  => api.delete(`/materials/price-override/${encodeURIComponent(codigo)}`),
+  refreshCache:   ()        => api.post('/materials/catalog/refresh'),
 };
 
 // ─── Embroidery ───────────────────────────────────────────────────────────

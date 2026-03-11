@@ -263,8 +263,20 @@ export async function getMateriaisCatalog() {
  */
 export async function getPrecosMateriais(codigos = []) {
   if (!codigos.length) return [];
-  const data = await erpGet('/precomaterial', { codigo: codigos.join(',') });
-  return Array.isArray(data) ? data : [];
+
+  // Divide em lotes de 50 para evitar URLs longas demais
+  const BATCH = 50;
+  const results = [];
+  for (let i = 0; i < codigos.length; i += BATCH) {
+    const batch = codigos.slice(i, i + BATCH);
+    try {
+      const data = await erpGet('/precomaterial', { codigo: batch.join(',') });
+      if (Array.isArray(data)) results.push(...data);
+    } catch (e) {
+      console.warn(`[ERP] getPrecosMateriais batch ${i}-${i + BATCH} falhou:`, e.message);
+    }
+  }
+  return results;
 }
 
 /**

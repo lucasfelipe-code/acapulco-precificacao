@@ -22,9 +22,10 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  quotes         Quote[]
-  approvalsDone  QuoteApproval[]
-  embroideries   EmbroideryJob[]
+  quotes            Quote[]
+  approvalsDone     QuoteApproval[]
+  embroideries      EmbroideryJob[]
+  priceOverrides    MaterialPriceOverride[]
 
   @@map("users")
 }
@@ -224,6 +225,25 @@ model ManufacturingCost {
   quoteItems  QuoteFabrication[]
 
   @@map("manufacturing_costs")
+}
+
+// ─── Overrides de Preço de Matéria-Prima (Comprador) ─────────────────────────
+// Preço temporário enquanto a NF ainda não foi lançada no ERP.
+
+model MaterialPriceOverride {
+  id        Int      @id @default(autoincrement())
+  codigo    String   @unique
+  descricao String
+  erpPreco  Float    // último preço lido do ERP
+  novoPreco Float    // preço temporário definido pelo comprador
+  nota      String?
+
+  updatedBy Int
+  user      User     @relation(fields: [updatedBy], references: [id])
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@map("material_price_overrides")
 }
 
 // ─── Aprovação de Orçamentos ─────────────────────────────────────────────────
