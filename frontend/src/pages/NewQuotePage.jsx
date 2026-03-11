@@ -61,7 +61,6 @@ export default function NewQuotePage() {
 
     // Step 4 — precificação
     markup:        65,
-    markupSource:  'MANUAL',
     discount:      0,
 
     notes: '',
