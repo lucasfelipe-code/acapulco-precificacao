@@ -2,28 +2,45 @@
  * Step2Materials.jsx
  *
  * Regras de negócio:
- * - Bloqueio: produto sem tecido/malha (category === '9') não pode avançar.
- *   Vendedor deve adicionar um tecido via busca ERP ou sugestão IA.
- * - Stale guard: materiais sem atualização de preço há > 15 dias bloqueiam avanço.
- *   Correção manual libera.
- * - Busca ERP: pesquisa textual no catálogo Sisplan (cache 4h no backend).
- * - IA colaborativa: GPT sugere melhor match + até 10 similares (≥ 80%).
- *   Regra dos 15 dias aplicada aos sugeridos também.
+ * 1. DUPLA VALIDAÇÃO DE TECIDO
+ *    - Backend seta isFabric via setor.descricao / descrição / codigoImpressao
+ *    - Frontend aplica segunda camada: keywords na descrição do item
+ *    - Ambas as camadas em OR → garante que nenhum tecido escape
+ *    - Guard 15 dias SOMENTE em tecidos/malhas (+3% frete — calculado na Step4)
+ *
+ * 2. CHECKLIST DE COMPLETUDE
+ *    - Todo item vindo do BOM do ERP exige revisão explícita antes de avançar
+ *    - Revisão = confirmar consumo, corrigir preço, ou remover conscientemente
+ *    - Itens adicionados manualmente pelo vendedor já nascem confirmados
  */
 
 import { useState, useRef } from 'react';
 import {
   AlertTriangle, CheckCircle, Edit2, X, Plus,
   Package, ChevronDown, ChevronUp, Search, Sparkles,
-  RefreshCw, Info,
+  RefreshCw, Info, ClipboardCheck, CheckSquare,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { materialsAPI } from '../../../services/api';
 
 const FRESHNESS_LIMIT = 15;
 
-// Material é tecido se codigoImpressao==="9" (BOM do ERP) ou isFabric===true (busca/IA)
-const isMaterialFabric = (m) => m.category === '9' || m.isFabric === true;
+// ─── Dupla validação de tecido ────────────────────────────────────────────────
+// Camada 1 (backend): isFabric=true ou category==='9'
+// Camada 2 (frontend): keyword na descrição — net de segurança caso o backend falhe
+const FABRIC_KEYWORDS = [
+  'TECIDO', 'MALHA', 'FIO', 'FIOS', 'FIBRA', 'LONA', 'BRIM', 'SARJA',
+  'JERSEY', 'OXFORD', 'HELANCA', 'PIQUET', 'MOLETON', 'SPANDEX', 'ELASTANO',
+  'NYLON', 'POLIESTER', 'ALGODAO', 'VISCOSE', 'LYCRA', 'MICROFIBRA',
+  'NATURAL FIT', 'DRY FIT', 'DRYFIT', 'RIBANA',
+];
+
+const hasFabricKeyword = (str) =>
+  !!str && FABRIC_KEYWORDS.some((k) => str.toUpperCase().includes(k));
+
+// Retorna true se QUALQUER uma das duas camadas identificar como tecido
+const isMaterialFabric = (m) =>
+  m.category === '9' || m.isFabric === true || hasFabricKeyword(m.name);
 
 // ─── Stale badge ─────────────────────────────────────────────────────────────
 function StaleBadge({ mat }) {
@@ -53,13 +70,18 @@ function StaleBadge({ mat }) {
 }
 
 // ─── MaterialRow ─────────────────────────────────────────────────────────────
-function MaterialRow({ mat, onOverride, onRemove, onRestore }) {
-  const [editing, setEditing] = useState(false);
-  const [newPrice, setNewPrice] = useState('');
-  const [priceNote, setPriceNote] = useState('');
+function MaterialRow({ mat, onOverride, onRemove, onRestore, onConfirm }) {
+  const [editing, setEditing]       = useState(false);
+  const [newPrice, setNewPrice]     = useState('');
+  const [priceNote, setPriceNote]   = useState('');
+  const [newConsumption, setNewCons] = useState('');
+  const [editingCons, setEditingCons] = useState(false);
 
   const effectivePrice = mat.priceOverride ?? mat.unitPrice;
-  const costPerPiece   = effectivePrice * mat.consumption;
+  const effectiveCons  = mat.consumptionOverride ?? mat.consumption;
+  const costPerPiece   = effectivePrice * effectiveCons;
+  const isFabric       = isMaterialFabric(mat);
+  const needsReview    = !mat.confirmed && !mat.addedManually && !mat.removed;
 
   const saveOverride = () => {
     const val = parseFloat(newPrice);
@@ -67,6 +89,15 @@ function MaterialRow({ mat, onOverride, onRemove, onRestore }) {
     onOverride(mat.erpCode, val, priceNote);
     setEditing(false);
     setNewPrice('');
+  };
+
+  const saveCons = () => {
+    const val = parseFloat(newConsumption);
+    if (!val || val <= 0) { toast.error('Consumo inválido'); return; }
+    onConfirm(mat.erpCode, { consumptionOverride: val });
+    setEditingCons(false);
+    setNewCons('');
+    toast.success('Consumo atualizado');
   };
 
   if (mat.removed) {
@@ -82,27 +113,38 @@ function MaterialRow({ mat, onOverride, onRemove, onRestore }) {
 
   return (
     <div className={`border rounded-xl p-3 space-y-2 transition-colors ${
-      mat.isStale && !mat.priceOverride
-        ? 'border-red-200 bg-red-50'
-        : mat.addedManually
-          ? 'border-blue-200 bg-blue-50'
-          : 'border-gray-200 bg-white'
+      needsReview
+        ? 'border-amber-300 bg-amber-50'
+        : mat.isStale && !mat.priceOverride
+          ? 'border-red-200 bg-red-50'
+          : mat.addedManually
+            ? 'border-blue-200 bg-blue-50'
+            : 'border-gray-200 bg-white'
     }`}>
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-medium text-gray-900 truncate">{mat.name}</span>
-            {isMaterialFabric(mat) && (
+            {isFabric && (
               <span className="text-xs text-purple-600 bg-purple-100 px-1.5 py-0.5 rounded font-medium">Tecido</span>
             )}
             {mat.addedManually && (
               <span className="text-xs text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded">Adicionado</span>
             )}
-            <StaleBadge mat={mat} />
+            {mat.confirmed && !mat.addedManually && (
+              <span className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-100 px-1.5 py-0.5 rounded">
+                <CheckSquare className="w-3 h-3" /> Revisado
+              </span>
+            )}
+            {needsReview && (
+              <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded font-medium">
+                <ClipboardCheck className="w-3 h-3" /> Revisar
+              </span>
+            )}
+            {isFabric && <StaleBadge mat={mat} />}
           </div>
           <p className="text-xs text-gray-500 mt-0.5">
-            Cód: {mat.erpCode} · {mat.consumption} {mat.unit}/peça
-            {mat.category && ` · ${mat.category}`}
+            Cód: {mat.erpCode} · {effectiveCons} {mat.unit}/peça
           </p>
         </div>
         <button onClick={() => onRemove(mat.erpCode)} className="text-gray-400 hover:text-red-500 shrink-0" title="Remover">
@@ -114,7 +156,7 @@ function MaterialRow({ mat, onOverride, onRemove, onRestore }) {
         <div className="flex items-center gap-3 text-sm">
           <div>
             <span className="text-gray-500 text-xs">Preço/un</span>
-            <p className={`font-semibold ${mat.priceOverride ? 'text-blue-700' : mat.isStale ? 'text-red-600' : 'text-gray-900'}`}>
+            <p className={`font-semibold ${mat.priceOverride ? 'text-blue-700' : mat.isStale && isFabric ? 'text-red-600' : 'text-gray-900'}`}>
               R$ {effectivePrice.toFixed(2)}
             </p>
             {mat.priceOverride && (
@@ -126,23 +168,56 @@ function MaterialRow({ mat, onOverride, onRemove, onRestore }) {
             <p className="font-semibold text-gray-900">R$ {costPerPiece.toFixed(2)}</p>
           </div>
         </div>
-        <button onClick={() => setEditing(!editing)} className="text-xs text-orange-600 hover:text-orange-700 font-medium underline">
-          {editing ? 'Cancelar' : 'Corrigir preço'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setEditingCons(!editingCons)}
+            className="text-xs text-gray-500 hover:text-gray-700 underline">
+            {editingCons ? 'Cancelar' : 'Ajustar consumo'}
+          </button>
+          {isFabric && (
+            <button onClick={() => setEditing(!editing)}
+              className="text-xs text-orange-600 hover:text-orange-700 font-medium underline">
+              {editing ? 'Cancelar' : 'Corrigir preço'}
+            </button>
+          )}
+          {needsReview && !editing && !editingCons && (
+            <button
+              onClick={() => onConfirm(mat.erpCode, {})}
+              className="text-xs font-semibold bg-amber-500 hover:bg-amber-600 text-white px-2 py-1 rounded-lg flex items-center gap-1"
+            >
+              <CheckSquare className="w-3 h-3" /> Confirmar
+            </button>
+          )}
+        </div>
       </div>
 
-      {mat.isStale && !mat.priceOverride && (
+      {/* Ajuste de consumo inline */}
+      {editingCons && (
+        <div className="border-t border-gray-200 pt-2 space-y-2">
+          <p className="text-xs text-gray-600 font-medium">Ajustar consumo por peça</p>
+          <div className="flex items-center gap-2">
+            <input type="number" step="0.001" min="0.001" value={newConsumption}
+              onChange={(e) => setNewCons(e.target.value)}
+              placeholder={effectiveCons.toString()} className="input text-sm w-32" autoFocus />
+            <span className="text-xs text-gray-400">{mat.unit}/peça</span>
+            <button onClick={saveCons} className="btn-primary text-xs py-1.5 px-3">Salvar</button>
+          </div>
+        </div>
+      )}
+
+      {/* Alerta stale (somente tecidos) */}
+      {isFabric && mat.isStale && !mat.priceOverride && (
         <div className="flex items-start gap-2 p-2 bg-red-100 rounded-lg">
           <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
           <p className="text-xs text-red-700">
             <strong>Preço desatualizado</strong> — {mat.name} está sem compra há{' '}
             <strong>{mat.staleDays} dias</strong> (limite: {FRESHNESS_LIMIT} dias).
-            Solicite atualização ao <strong>setor de compras</strong> ou corrija o preço abaixo.
+            Solicite ao <strong>setor de compras</strong> ou corrija o preço abaixo.
           </p>
         </div>
       )}
 
-      {editing && (
+      {/* Correção de preço (somente tecidos) */}
+      {isFabric && editing && (
         <div className="border-t border-gray-200 pt-2 space-y-2">
           <p className="text-xs text-gray-600 font-medium">Correção manual de preço</p>
           <div className="grid grid-cols-2 gap-2">
@@ -178,10 +253,9 @@ function SimilarityBadge({ value }) {
   );
 }
 
-// ─── ResultCard — card de resultado de busca / sugestão IA ───────────────────
+// ─── ResultCard ───────────────────────────────────────────────────────────────
 function ResultCard({ mat, onAdd, isBest }) {
   const [consumption, setConsumption] = useState('1');
-  const [expanded, setExpanded]       = useState(false);
 
   const handleAdd = () => {
     const cons = parseFloat(consumption);
@@ -202,6 +276,9 @@ function ResultCard({ mat, onAdd, isBest }) {
               </span>
             )}
             {mat.similarity !== undefined && <SimilarityBadge value={mat.similarity} />}
+            {mat.isFabric && (
+              <span className="text-xs text-purple-600 bg-purple-100 px-1.5 py-0.5 rounded">Tecido</span>
+            )}
             {mat.isStale && (
               <span className="text-xs text-red-600 bg-red-100 px-1.5 py-0.5 rounded flex items-center gap-1">
                 <AlertTriangle className="w-3 h-3" />{mat.staleDays}d sem atualização
@@ -221,7 +298,6 @@ function ResultCard({ mat, onAdd, isBest }) {
         </div>
       </div>
 
-      {/* Consumo + adicionar */}
       <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
         <label className="text-xs text-gray-500 shrink-0">Consumo/peça</label>
         <input
@@ -248,12 +324,12 @@ function ResultCard({ mat, onAdd, isBest }) {
 
 // ─── AddMaterialPanel ─────────────────────────────────────────────────────────
 function AddMaterialPanel({ onAdd, onClose }) {
-  const [query, setQuery]           = useState('');
-  const [mode, setMode]             = useState(null); // 'search' | 'ai'
-  const [loading, setLoading]       = useState(false);
-  const [searchResults, setSearch]  = useState([]);
-  const [aiResult, setAiResult]     = useState(null); // { bestMatch, alternatives }
-  const debounceRef                 = useRef(null);
+  const [query, setQuery]          = useState('');
+  const [mode, setMode]            = useState(null); // 'search' | 'ai'
+  const [loading, setLoading]      = useState(false);
+  const [searchResults, setSearch] = useState([]);
+  const [aiResult, setAiResult]    = useState(null);
+  const debounceRef                = useRef(null);
 
   const runSearch = async (q) => {
     if (q.length < 2) { setSearch([]); return; }
@@ -299,7 +375,7 @@ function AddMaterialPanel({ onAdd, onClose }) {
       erpCode:       mat.codigo,
       name:          mat.descricao,
       category:      null,
-      isFabric:      mat.isFabric || false,
+      isFabric:      mat.isFabric || hasFabricKeyword(mat.descricao),
       unit:          mat.unidade || 'un',
       consumption,
       unitPrice:     mat.preco || 0,
@@ -311,8 +387,8 @@ function AddMaterialPanel({ onAdd, onClose }) {
       staleDays:     mat.staleDays,
       staleReason:   mat.staleReason || null,
       costPerPiece:  (mat.preco || 0) * consumption,
-      addedManually: true,
-      addedFromERP:  true,
+      addedManually: true,   // adicionado pelo vendedor = já confirmado
+      confirmed:     true,
       removed:       false,
     });
     toast.success(`${mat.descricao} adicionado`);
@@ -327,13 +403,12 @@ function AddMaterialPanel({ onAdd, onClose }) {
         <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
       </div>
 
-      {/* Input + botões */}
       <div className="flex gap-2">
         <input
           className="input flex-1 text-sm"
           value={query}
           onChange={(e) => handleQueryChange(e.target.value)}
-          placeholder="Ex: malha piquet algodão, tecido oxford..."
+          placeholder="Ex: malha piquet algodão, tecido oxford, botão pressão..."
           autoFocus
         />
         <button
@@ -365,7 +440,6 @@ function AddMaterialPanel({ onAdd, onClose }) {
         </span>
       </p>
 
-      {/* Loading */}
       {loading && (
         <div className="flex items-center gap-2 text-sm text-gray-500 py-2">
           <RefreshCw className="w-4 h-4 animate-spin" />
@@ -373,7 +447,6 @@ function AddMaterialPanel({ onAdd, onClose }) {
         </div>
       )}
 
-      {/* Resultados — busca ERP */}
       {!loading && mode === 'search' && searchResults.length > 0 && (
         <div className="space-y-2">
           <p className="text-xs text-gray-500 font-medium">{searchResults.length} resultado(s) no ERP</p>
@@ -386,7 +459,6 @@ function AddMaterialPanel({ onAdd, onClose }) {
         <p className="text-sm text-gray-500 py-2 text-center">Nenhum material encontrado. Tente a IA.</p>
       )}
 
-      {/* Resultados — IA */}
       {!loading && mode === 'ai' && hasAIResults && (
         <div className="space-y-2">
           <p className="text-xs text-gray-500 font-medium">
@@ -414,15 +486,27 @@ export default function Step2Materials({ data, update, onNext, onBack }) {
   const activeMats  = materials.filter((m) => !m.removed);
   const removedMats = materials.filter((m) => m.removed);
 
-  // materiais com preço bloqueante (stale sem override)
-  const staleBlocking = activeMats.filter((m) => m.isStale && !m.priceOverride);
+  // Regra 1 — guard 15 dias (somente tecidos sem override)
+  const staleBlocking = activeMats.filter((m) => isMaterialFabric(m) && m.isStale && !m.priceOverride);
 
-  // regra: precisa de pelo menos 1 tecido/malha
-  const hasTecido  = activeMats.some(isMaterialFabric);
-  const noFabric   = !hasTecido;
+  // Regra 2 — precisa de pelo menos 1 tecido/malha
+  const hasTecido = activeMats.some(isMaterialFabric);
 
+  // Regra 3 — checklist: itens do BOM que ainda não foram revisados
+  const pendingReview = activeMats.filter((m) => !m.confirmed && !m.addedManually);
+
+  const canProceed =
+    staleBlocking.length === 0 &&
+    activeMats.length > 0 &&
+    hasTecido &&
+    pendingReview.length === 0;
+
+  // ─── Handlers ───────────────────────────────────────────────────────────────
   const updateMat = (erpCode, patch) =>
     update({ materials: materials.map((m) => m.erpCode === erpCode ? { ...m, ...patch } : m) });
+
+  const handleConfirm = (erpCode, extraPatch = {}) =>
+    updateMat(erpCode, { confirmed: true, ...extraPatch });
 
   const handleOverride = (erpCode, newPrice, note) => {
     updateMat(erpCode, {
@@ -430,15 +514,18 @@ export default function Step2Materials({ data, update, onNext, onBack }) {
       priceNote:     note || `Preço corrigido em ${new Date().toLocaleDateString('pt-BR')}`,
       priceSource:   'MANUAL',
       isStale:       false,
+      confirmed:     true, // corrigir preço = revisão concluída
     });
     toast.success('Preço corrigido');
   };
 
-  const handleRemove  = (erpCode) => updateMat(erpCode, { removed: true });
-  const handleRestore = (erpCode) => updateMat(erpCode, { removed: false });
+  const handleRemove = (erpCode) =>
+    updateMat(erpCode, { removed: true, confirmed: true }); // remover = decisão consciente
+
+  const handleRestore = (erpCode) =>
+    updateMat(erpCode, { removed: false, confirmed: false }); // restaurar volta a pendente
 
   const handleAddFromERP = (mat) => {
-    // evita duplicata
     if (materials.some((m) => m.erpCode === mat.erpCode)) {
       toast.error('Material já está na lista');
       return;
@@ -447,43 +534,86 @@ export default function Step2Materials({ data, update, onNext, onBack }) {
     setShowAddPanel(false);
   };
 
+  // Confirmar todos os pendentes de uma vez
+  const handleConfirmAll = () => {
+    update({
+      materials: materials.map((m) =>
+        !m.confirmed && !m.addedManually && !m.removed ? { ...m, confirmed: true } : m
+      ),
+    });
+    toast.success('Todos os itens confirmados');
+  };
+
   const totalMaterial = activeMats.reduce((sum, m) => {
     const price = m.priceOverride ?? m.unitPrice ?? 0;
-    return sum + price * (m.consumption ?? 1);
+    const cons  = m.consumptionOverride ?? m.consumption ?? 1;
+    return sum + price * cons;
   }, 0);
-
-  const canProceed = staleBlocking.length === 0 && activeMats.length > 0 && hasTecido;
 
   return (
     <div className="space-y-5">
       <div>
         <h2 className="text-base font-semibold text-gray-900">Etapa 2 — Matéria-Prima</h2>
         <p className="text-sm text-gray-500 mt-0.5">
-          Materiais do BOM do ERP. Corrija preços desatualizados e verifique se há tecido/malha.
+          Revise todos os itens do BOM. Confirme consumo, corrija preços ou remova o que não se aplica.
         </p>
       </div>
 
-      {/* Alerta: sem tecido */}
-      {noFabric && activeMats.length > 0 && (
+      {/* ── Checklist de revisão ────────────────────────────────────────────── */}
+      {pendingReview.length > 0 && (
+        <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <ClipboardCheck className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-amber-800">
+                  {pendingReview.length} item(ns) aguardando revisão
+                </p>
+                <p className="text-xs text-amber-700 mt-0.5">
+                  Verifique cada item do ERP: confirme o consumo, corrija o preço ou remova se não se aplica.
+                </p>
+                <ul className="mt-1.5 space-y-0.5">
+                  {pendingReview.map((m) => (
+                    <li key={m.erpCode} className="text-xs text-amber-800 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block shrink-0" />
+                      {m.name}
+                      {isMaterialFabric(m) && <span className="text-purple-600 font-medium">(tecido)</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+            <button
+              onClick={handleConfirmAll}
+              className="shrink-0 text-xs font-semibold bg-amber-500 hover:bg-amber-600 text-white px-3 py-1.5 rounded-lg whitespace-nowrap"
+            >
+              Confirmar todos
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Alerta: sem tecido ──────────────────────────────────────────────── */}
+      {!hasTecido && activeMats.length > 0 && (
         <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 text-purple-600 shrink-0 mt-0.5" />
           <div>
-            <p className="text-sm font-semibold text-purple-800">Nenhum tecido / malha no produto</p>
+            <p className="text-sm font-semibold text-purple-800">Nenhum tecido / malha identificado</p>
             <p className="text-xs text-purple-700 mt-0.5">
-              O ERP não retornou tecido principal (categoria 9) para esta referência.
-              Adicione um tecido via busca ERP ou sugestão IA para continuar.
+              O produto precisa de pelo menos um tecido ou malha principal.
+              Adicione via busca ERP ou sugestão IA para continuar.
             </p>
           </div>
         </div>
       )}
 
-      {/* Alerta: stale */}
+      {/* ── Alerta: stale ───────────────────────────────────────────────────── */}
       {staleBlocking.length > 0 && (
         <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
           <div>
             <p className="text-sm font-semibold text-red-800">
-              {staleBlocking.length} material(is) com preço desatualizado
+              {staleBlocking.length} tecido(s) com preço desatualizado
             </p>
             <p className="text-xs text-red-700 mt-0.5">
               Corrija os preços abaixo ou solicite atualização ao setor de compras.
@@ -499,7 +629,7 @@ export default function Step2Materials({ data, update, onNext, onBack }) {
         </div>
       )}
 
-      {/* Lista vazia */}
+      {/* ── Lista vazia ─────────────────────────────────────────────────────── */}
       {activeMats.length === 0 && (
         <div className="text-center py-8 text-gray-400">
           <Package className="w-10 h-10 mx-auto mb-2 opacity-40" />
@@ -507,7 +637,7 @@ export default function Step2Materials({ data, update, onNext, onBack }) {
         </div>
       )}
 
-      {/* Lista de materiais */}
+      {/* ── Lista de materiais ──────────────────────────────────────────────── */}
       <div className="space-y-2">
         {activeMats.map((mat) => (
           <MaterialRow
@@ -516,11 +646,12 @@ export default function Step2Materials({ data, update, onNext, onBack }) {
             onOverride={handleOverride}
             onRemove={handleRemove}
             onRestore={handleRestore}
+            onConfirm={handleConfirm}
           />
         ))}
       </div>
 
-      {/* Materiais removidos */}
+      {/* ── Materiais removidos ─────────────────────────────────────────────── */}
       {removedMats.length > 0 && (
         <div>
           <button onClick={() => setShowRemoved(!showRemoved)}
@@ -532,20 +663,21 @@ export default function Step2Materials({ data, update, onNext, onBack }) {
             <div className="mt-2 space-y-1">
               {removedMats.map((mat) => (
                 <MaterialRow key={mat.erpCode} mat={mat}
-                  onOverride={handleOverride} onRemove={handleRemove} onRestore={handleRestore} />
+                  onOverride={handleOverride} onRemove={handleRemove}
+                  onRestore={handleRestore} onConfirm={handleConfirm} />
               ))}
             </div>
           )}
         </div>
       )}
 
-      {/* Adicionar via ERP / IA */}
+      {/* ── Adicionar via ERP / IA ──────────────────────────────────────────── */}
       <div>
         {!showAddPanel && (
           <button onClick={() => setShowAddPanel(true)}
             className="flex items-center gap-2 text-sm text-orange-600 font-medium hover:text-orange-700">
             <Plus className="w-4 h-4" />
-            {noFabric ? 'Adicionar tecido / material (obrigatório)' : 'Adicionar material / aviamento extra'}
+            {!hasTecido ? 'Adicionar tecido / material (obrigatório)' : 'Adicionar material / aviamento extra'}
           </button>
         )}
         {showAddPanel && (
@@ -553,17 +685,21 @@ export default function Step2Materials({ data, update, onNext, onBack }) {
         )}
       </div>
 
-      {/* Total matéria-prima */}
+      {/* ── Total matéria-prima ─────────────────────────────────────────────── */}
       {totalMaterial > 0 && (
         <div className="p-4 bg-orange-50 border border-orange-100 rounded-xl">
           <p className="text-xs font-semibold text-orange-700 uppercase tracking-wide mb-2">Total Matéria-Prima</p>
           <div className="space-y-1 text-sm">
             {activeMats.map((m) => {
               const price = m.priceOverride ?? m.unitPrice ?? 0;
-              const cost  = price * (m.consumption ?? 1);
+              const cons  = m.consumptionOverride ?? m.consumption ?? 1;
+              const cost  = price * cons;
               return (
                 <div key={m.erpCode} className="flex justify-between text-gray-600">
-                  <span className="truncate max-w-[200px]">{m.name} ({m.consumption} {m.unit})</span>
+                  <span className="truncate max-w-[200px]">
+                    {m.name} ({cons} {m.unit})
+                    {isMaterialFabric(m) && <span className="text-purple-500 text-xs ml-1">●</span>}
+                  </span>
                   <span>R$ {cost.toFixed(2)}</span>
                 </div>
               );
@@ -573,10 +709,11 @@ export default function Step2Materials({ data, update, onNext, onBack }) {
               <span className="text-orange-700">R$ {totalMaterial.toFixed(2)}/peça</span>
             </div>
           </div>
+          <p className="text-xs text-gray-400 mt-2">● = tecido/malha (inclui +3% frete na etapa de precificação)</p>
         </div>
       )}
 
-      {/* Navegação */}
+      {/* ── Navegação ───────────────────────────────────────────────────────── */}
       <div className="flex justify-between pt-2">
         <button onClick={onBack} className="btn-secondary">← Voltar</button>
         <button onClick={onNext} disabled={!canProceed}
@@ -587,11 +724,13 @@ export default function Step2Materials({ data, update, onNext, onBack }) {
 
       {!canProceed && (
         <p className="text-xs text-red-600 text-right -mt-2">
-          {staleBlocking.length > 0
-            ? 'Corrija os preços desatualizados para avançar'
-            : noFabric
-              ? 'Adicione um tecido/malha para avançar'
-              : 'Adicione pelo menos um material para avançar'}
+          {pendingReview.length > 0
+            ? `Revise os ${pendingReview.length} item(ns) pendentes para avançar`
+            : staleBlocking.length > 0
+              ? 'Corrija os preços de tecidos desatualizados para avançar'
+              : !hasTecido
+                ? 'Adicione um tecido/malha para avançar'
+                : 'Adicione pelo menos um material para avançar'}
         </p>
       )}
     </div>

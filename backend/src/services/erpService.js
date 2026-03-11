@@ -320,6 +320,44 @@ function staleDaysFrom(dateStr) {
   return Math.floor((Date.now() - new Date(dateStr).getTime()) / (1000 * 60 * 60 * 24));
 }
 
+// ─── Detecção de tecido/malha (matéria-prima principal) ───────────────────────
+// Estratégia multi-nível: setor.descricao → descrição do item → codigoImpressao
+const FABRIC_KEYWORDS = [
+  'TECIDO', 'MALHA', 'FIO', 'FIOS', 'FIBRA', 'FIBRAS',
+  'LONA', 'BRIM', 'SARJA', 'JERSEY', 'OXFORD', 'HELANCA',
+  'PIQUET', 'MOLETON', 'SPANDEX', 'ELASTANO', 'NYLON',
+  'POLIESTER', 'ALGODAO', 'VISCOSE', 'LYCRA', 'MICROFIBRA',
+  'NATURAL FIT', 'DRYFIT', 'DRY FIT', 'RIBANA',
+];
+
+function hasFabricKeyword(str) {
+  if (!str) return false;
+  const s = str.toUpperCase();
+  return FABRIC_KEYWORDS.some(k => s.includes(k));
+}
+
+/**
+ * Determina se um item do BOM é tecido/malha (matéria-prima principal).
+ * Tenta três estratégias em ordem de confiabilidade:
+ *  1. setor.descricao — campo de setor/grupo do Sisplan
+ *  2. descrição do item — nome do insumo
+ *  3. codigoImpressao === '9' — fallback legado (nem sempre preenchido)
+ */
+function isFabricItem(item) {
+  // 1. Setor (campo TipoPadrao com codigo + descricao)
+  const setorDesc = item.setor?.descricao || item.setor?.nome || null;
+  if (setorDesc && hasFabricKeyword(setorDesc)) return true;
+
+  // 2. Descrição do item ou referência
+  const descricao = item.referencia?.descricao || item.descricao || item.nome || '';
+  if (hasFabricKeyword(descricao)) return true;
+
+  // 3. Fallback: codigoImpressao (documentação incompleta do Sisplan)
+  if (item.codigoImpressao === '9') return true;
+
+  return false;
+}
+
 /**
  * Busca completa para o wizard de orçamento usando /formacao-preco como fonte primária.
  * Esse endpoint do Sisplan retorna BOM completo + custos de processo já calculados.
@@ -353,20 +391,19 @@ export async function getDadosProdutoParaOrcamento(referencia, forceRefresh = fa
       : [];
 
   // ─── Materiais (abreviado = "C") ───────────────────────────────────────────
-  // codigoImpressao: "9" = tecido principal → sujeito ao guard dos 15 dias
-  //                  outros (acessório, embalagem, etc.) → sem guard de preço
+  // Guard 15 dias APENAS para tecidos/malhas (isFabricItem=true).
+  // Acessórios, botões, embalagens → sem guard de preço.
   const materials = itens
     .filter(item => item.abreviado === 'C')
     .map(item => {
       const dateStr    = item.dataAtualizacao || item.data || null;
-      const isFabric   = item.codigoImpressao === '9'; // tecido/malha principal
+      const isFabric   = isFabricItem(item); // tecido/malha principal
       const stale      = isFabric ? isMaterialDateStale(dateStr) : false;
       const staleDaysV = stale ? staleDaysFrom(dateStr) : null;
 
       return {
         erpCode:      item.referencia?.codigo   || item.codigo  || null,
         name:         item.referencia?.descricao || item.descricao || item.nome || 'Material',
-        // codigoImpressao: "9"=tecido principal, "2"=acessório, "3"=embalagem
         category:     item.codigoImpressao    || null,
         isFabric,
         unit:         item.unidade            || 'un',

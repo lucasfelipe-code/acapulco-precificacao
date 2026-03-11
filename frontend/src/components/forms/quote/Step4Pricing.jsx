@@ -2,16 +2,28 @@ import { useMemo } from 'react';
 
 const FABRIC_FREIGHT_RATE = 0.03; // 3% sobre custo de tecidos/malhas
 
+// Dupla validação de tecido (espelho do Step2)
+const FABRIC_KWS = [
+  'TECIDO','MALHA','FIO','FIOS','FIBRA','LONA','BRIM','SARJA','JERSEY','OXFORD',
+  'HELANCA','PIQUET','MOLETON','SPANDEX','ELASTANO','NYLON','POLIESTER','ALGODAO',
+  'VISCOSE','LYCRA','MICROFIBRA','NATURAL FIT','DRY FIT','DRYFIT','RIBANA',
+];
+const isFabricMat = (m) =>
+  m.category === '9' || m.isFabric === true ||
+  (!!m.name && FABRIC_KWS.some(k => m.name.toUpperCase().includes(k)));
+
 const calcPricing = (data) => {
   const activeMats = (data.materials || []).filter(m => !m.removed);
 
-  const totalMaterial = activeMats
-    .reduce((sum, m) => sum + (m.priceOverride ?? m.unitPrice ?? 0) * (m.consumption ?? 1), 0);
+  const matCons = (m) => m.consumptionOverride ?? m.consumption ?? 1;
 
-  // 3% frete aplicado apenas sobre materiais de tecido/malha (isFabric ou category==='9')
+  const totalMaterial = activeMats
+    .reduce((sum, m) => sum + (m.priceOverride ?? m.unitPrice ?? 0) * matCons(m), 0);
+
+  // 3% frete aplicado apenas sobre materiais de tecido/malha (dupla validação)
   const totalFabricMaterial = activeMats
-    .filter(m => m.isFabric || m.category === '9')
-    .reduce((sum, m) => sum + (m.priceOverride ?? m.unitPrice ?? 0) * (m.consumption ?? 1), 0);
+    .filter(isFabricMat)
+    .reduce((sum, m) => sum + (m.priceOverride ?? m.unitPrice ?? 0) * matCons(m), 0);
   const fabricFreight = totalFabricMaterial * FABRIC_FREIGHT_RATE;
 
   const totalFabrication = (data.fabricationItems || [])
