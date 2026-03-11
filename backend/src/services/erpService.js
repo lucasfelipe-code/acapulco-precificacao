@@ -256,6 +256,18 @@ export async function getMateriaisCatalog() {
 }
 
 /**
+ * Busca preços de múltiplos materiais em uma única chamada ao ERP.
+ * GET /precomaterial?codigo=001,002,003
+ * Retorna array com: codigo, descricao, preco1, precoCompra, data, unidade.
+ * O campo `data` = data da última entrada de NF — base do guard de 15 dias.
+ */
+export async function getPrecosMateriais(codigos = []) {
+  if (!codigos.length) return [];
+  const data = await erpGet('/precomaterial', { codigo: codigos.join(',') });
+  return Array.isArray(data) ? data : [];
+}
+
+/**
  * Força recarga do catálogo de materiais.
  */
 export function clearMateriaisCatalogCache() {

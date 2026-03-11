@@ -4,22 +4,33 @@
  * GET  /api/materials/search?q=  — busca textual no catálogo ERP (cache 4h)
  * POST /api/materials/ai-suggest — IA sugere melhor match + até 10 similares (≥80%)
  *
- * Regra dos 15 dias: campo `data` de /precomaterial — se ausente ou > 15 dias,
- * o material é marcado como stale e o vendedor deve corrigir o preço manualmente.
+ * Regra dos 15 dias:
+ *   A atualização de preço da matéria-prima ocorre na entrada da nota fiscal de compra.
+ *   O campo `data` de /precomaterial armazena a data da última NF entrada.
+ *   Se data ausente (Delphi null: 1899-12-30) ou > 15 dias → preço stale → bloqueio.
+ *
+ *   Fluxo de enriquecimento:
+ *   1. Catálogo de descrições vem de /material (suporta limit + ativo)
+ *   2. Após filtrar resultados, busca preços reais em lote via /precomaterial?codigo=...
+ *   3. Junta os dados → aplica guard dos 15 dias com a data real da última NF
  */
 
 import { Router } from 'express';
 import OpenAI from 'openai';
 import { requireAuth } from '../middleware/auth.js';
-import { getMateriaisCatalog, clearMateriaisCatalogCache } from '../services/erpService.js';
+import {
+  getMateriaisCatalog,
+  clearMateriaisCatalogCache,
+  getPrecosMateriais,
+} from '../services/erpService.js';
 
 const router = Router();
 router.use(requireAuth);
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const DELPHI_NULL  = '1899-12-30';
-const STALE_MS     = 15 * 24 * 60 * 60 * 1000;
+const DELPHI_NULL = '1899-12-30';
+const STALE_MS    = 15 * 24 * 60 * 60 * 1000;
 
 function isStale(dateStr) {
   if (!dateStr || dateStr.startsWith(DELPHI_NULL)) return true;
@@ -31,9 +42,8 @@ function staleDays(dateStr) {
   return Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
 }
 
-function mapMaterial(m, similarity = null) {
-  // /material schema: grupo é objeto { codigo, descricao }; preço em precoMedio
-  // Não retorna campo `data` de preço — marca isStale=true para forçar verificação ao adicionar
+/** Base do catálogo (/material): apenas descrição + unidade + grupo */
+function mapBase(m, similarity = null) {
   return {
     codigo:    m.codigo,
     descricao: m.descricao || '',
@@ -41,15 +51,56 @@ function mapMaterial(m, similarity = null) {
     unidade:   m.unidade || 'un',
     preco:     parseFloat(m.precoMedio) || 0,
     data:      null,
-    isStale:   true,   // preço médio — vendedor deve verificar ao adicionar
+    isStale:   true,   // provisório — será substituído após enriquecimento
     staleDays: null,
     ...(similarity !== null && { similarity }),
   };
 }
 
 /**
+ * Enriquece lista de materiais com preço real + data da última NF (15-day guard).
+ * Chama /precomaterial?codigo=... em lote — uma única requisição ao ERP.
+ */
+async function enrichWithPrices(items) {
+  if (!items.length) return items;
+  try {
+    const codigos = items.map(m => m.codigo);
+    const precos  = await getPrecosMateriais(codigos);
+
+    // Índice por código para O(1) lookup
+    const precoMap = {};
+    precos.forEach(p => { precoMap[p.codigo] = p; });
+
+    return items.map(m => {
+      const p = precoMap[m.codigo];
+      if (!p) return m; // sem preço no ERP → mantém stale=true
+
+      const stale  = isStale(p.data);
+      const dataNF = (!p.data || p.data.startsWith(DELPHI_NULL)) ? null : p.data;
+
+      return {
+        ...m,
+        preco:     parseFloat(p.preco1) || parseFloat(p.precoCompra) || m.preco || 0,
+        data:      dataNF,
+        isStale:   stale,
+        staleDays: stale ? staleDays(p.data) : null,
+        // Mensagem explicativa para o vendedor
+        staleReason: stale
+          ? (dataNF
+              ? `Última NF de compra: ${new Date(dataNF).toLocaleDateString('pt-BR')} (${staleDays(p.data)} dias atrás)`
+              : 'Nenhuma NF de compra registrada no ERP')
+          : null,
+      };
+    });
+  } catch (e) {
+    console.warn('[Materials] Falha ao buscar preços (/precomaterial):', e.message);
+    return items; // retorna sem enriquecimento — stale=true por padrão
+  }
+}
+
+/**
  * GET /api/materials/search?q=texto
- * Filtra o catálogo ERP localmente por substring na descrição.
+ * Filtra catálogo por substring, depois enriquece com preço real + 15-day guard.
  * Retorna até 20 resultados.
  */
 router.get('/search', async (req, res, next) => {
@@ -58,12 +109,13 @@ router.get('/search', async (req, res, next) => {
     if (q.length < 2) return res.json([]);
 
     const catalog = await getMateriaisCatalog();
-    const results = catalog
+    const matched = catalog
       .filter(m => m.descricao?.toLowerCase().includes(q))
       .slice(0, 20)
-      .map(m => mapMaterial(m));
+      .map(m => mapBase(m));
 
-    res.json(results);
+    const enriched = await enrichWithPrices(matched);
+    res.json(enriched);
   } catch (err) {
     next(err);
   }
@@ -72,6 +124,11 @@ router.get('/search', async (req, res, next) => {
 /**
  * POST /api/materials/ai-suggest
  * body: { description: string }
+ *
+ * Fluxo:
+ *   1. IA interpreta descrição → sugere códigos com similarity
+ *   2. Enriquece cada sugestão com preço real + data última NF
+ *   3. Aplica guard dos 15 dias
  *
  * Retorna:
  *   bestMatch:    material com maior relevância (ou null)
@@ -91,7 +148,7 @@ router.post('/ai-suggest', async (req, res, next) => {
 
     // Catálogo compacto para o prompt (codigo|descricao|grupo|unidade)
     const catalogLines = catalog
-      .map(m => `${m.codigo}|${m.descricao}|${m.descricaoGrupo || ''}|${m.unidade || 'un'}`)
+      .map(m => `${m.codigo}|${m.descricao}|${m.grupo?.descricao || ''}|${m.unidade || 'un'}`)
       .join('\n');
 
     const prompt = `Você é um assistente especialista em matéria-prima têxtil para uniformes.
@@ -123,17 +180,24 @@ Se não houver nenhum match com similaridade ≥ 0.80, retorne: {"bestMatch": nu
 
     const aiResult = JSON.parse(completion.choices[0].message.content);
 
-    const enrichItem = (item) => {
+    // Mapeia códigos da IA → objetos do catálogo
+    const toItem = (item) => {
       const mat = catalog.find(m => m.codigo === item.codigo);
-      if (!mat) return null;
-      return mapMaterial(mat, item.similarity);
+      return mat ? mapBase(mat, item.similarity) : null;
     };
 
-    const bestMatch   = aiResult.bestMatch ? enrichItem(aiResult.bestMatch) : null;
-    const alternatives = (aiResult.alternatives || [])
-      .map(enrichItem)
+    const rawBest = aiResult.bestMatch ? toItem(aiResult.bestMatch) : null;
+    const rawAlt  = (aiResult.alternatives || [])
+      .map(toItem)
       .filter(Boolean)
-      .filter(a => !bestMatch || a.codigo !== bestMatch.codigo);
+      .filter(a => !rawBest || a.codigo !== rawBest.codigo);
+
+    // Enriquece tudo em um único lote
+    const allItems = [...(rawBest ? [rawBest] : []), ...rawAlt];
+    const enriched = await enrichWithPrices(allItems);
+
+    const bestMatch    = enriched[0] && rawBest ? enriched[0] : null;
+    const alternatives = enriched.slice(rawBest ? 1 : 0);
 
     res.json({ bestMatch, alternatives });
   } catch (err) {

@@ -240,7 +240,7 @@ function ResultCard({ mat, onAdd, isBest }) {
 
       {mat.isStale && (
         <p className="text-xs text-red-600">
-          ⚠ Preço desatualizado — será necessário corrigir manualmente após adicionar.
+          ⚠ {mat.staleReason || 'Preço desatualizado — corrija manualmente após adicionar.'}
         </p>
       )}
     </div>
