@@ -175,11 +175,16 @@ function MaterialRow({ mat, onOverride, onRemove, onRestore, onConfirm }) {
           </button>
           {isFabric && (
             <button onClick={() => setEditing(!editing)}
-              className="text-xs text-orange-600 hover:text-orange-700 font-medium underline">
-              {editing ? 'Cancelar' : 'Corrigir preço'}
+              className={`text-xs font-medium underline ${
+                mat.isStale && !mat.priceOverride
+                  ? 'text-red-600 hover:text-red-700 font-semibold'
+                  : 'text-orange-600 hover:text-orange-700'
+              }`}>
+              {editing ? 'Cancelar' : mat.isStale && !mat.priceOverride ? '⚠ Corrigir preço (obrigatório)' : 'Corrigir preço'}
             </button>
           )}
-          {needsReview && !editing && !editingCons && (
+          {/* Confirmar só aparece se: item pendente E (não é tecido stale sem correção) */}
+          {needsReview && !editing && !editingCons && !(isFabric && mat.isStale && !mat.priceOverride) && (
             <button
               onClick={() => onConfirm(mat.erpCode, {})}
               className="text-xs font-semibold bg-amber-500 hover:bg-amber-600 text-white px-2 py-1 rounded-lg flex items-center gap-1"
@@ -536,12 +541,28 @@ export default function Step2Materials({ data, update, onNext, onBack }) {
 
   // Confirmar todos os pendentes de uma vez
   const handleConfirmAll = () => {
+    // Tecidos stale sem correção NÃO podem ser confirmados em lote — exigem correção de preço
+    const staleFabrics = pendingReview.filter((m) => isMaterialFabric(m) && m.isStale && !m.priceOverride);
+    const confirmable  = pendingReview.filter((m) => !(isMaterialFabric(m) && m.isStale && !m.priceOverride));
+
+    if (!confirmable.length && staleFabrics.length) {
+      toast.error(`Corrija o preço dos ${staleFabrics.length} tecido(s) desatualizado(s) primeiro`);
+      return;
+    }
+
     update({
-      materials: materials.map((m) =>
-        !m.confirmed && !m.addedManually && !m.removed ? { ...m, confirmed: true } : m
-      ),
+      materials: materials.map((m) => {
+        const canConfirm = !m.confirmed && !m.addedManually && !m.removed &&
+          !(isMaterialFabric(m) && m.isStale && !m.priceOverride);
+        return canConfirm ? { ...m, confirmed: true } : m;
+      }),
     });
-    toast.success('Todos os itens confirmados');
+
+    if (staleFabrics.length) {
+      toast(`${confirmable.length} item(ns) confirmado(s). Corrija o preço dos ${staleFabrics.length} tecido(s) restante(s).`, { icon: '⚠️' });
+    } else {
+      toast.success('Todos os itens confirmados');
+    }
   };
 
   const totalMaterial = activeMats.reduce((sum, m) => {
@@ -573,13 +594,19 @@ export default function Step2Materials({ data, update, onNext, onBack }) {
                   Verifique cada item do ERP: confirme o consumo, corrija o preço ou remova se não se aplica.
                 </p>
                 <ul className="mt-1.5 space-y-0.5">
-                  {pendingReview.map((m) => (
-                    <li key={m.erpCode} className="text-xs text-amber-800 flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block shrink-0" />
-                      {m.name}
-                      {isMaterialFabric(m) && <span className="text-purple-600 font-medium">(tecido)</span>}
-                    </li>
-                  ))}
+                  {pendingReview.map((m) => {
+                    const needsPriceCorrection = isMaterialFabric(m) && m.isStale && !m.priceOverride;
+                    return (
+                      <li key={m.erpCode} className="text-xs text-amber-800 flex items-center gap-1">
+                        <span className={`w-1.5 h-1.5 rounded-full inline-block shrink-0 ${needsPriceCorrection ? 'bg-red-500' : 'bg-amber-500'}`} />
+                        {m.name}
+                        {needsPriceCorrection
+                          ? <span className="text-red-600 font-semibold">(corrigir preço — obrigatório)</span>
+                          : isMaterialFabric(m) && <span className="text-purple-600 font-medium">(tecido)</span>
+                        }
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             </div>
