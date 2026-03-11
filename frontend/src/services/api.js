@@ -52,7 +52,7 @@ export const quotesAPI = {
   submit:            (id)          => api.post(`/quotes/${id}/submit`),
   confirmEmbroidery: (id, data)    => api.post(`/quotes/${id}/confirm-embroidery`, data),
   delete:            (id)          => api.delete(`/quotes/${id}`),
-  stats:             ()            => api.get('/quotes/stats/summary'),
+  stats:             (params)      => api.get('/quotes/stats/summary', { params }),
 };
 
 // ─── Approvals ────────────────────────────────────────────────────────────
@@ -92,6 +92,7 @@ export const clientsAPI = {
 // ─── Users (admin) ────────────────────────────────────────────────────────
 export const usersAPI = {
   list:          ()            => api.get('/users'),
+  sellers:       ()            => api.get('/users/sellers'),
   create:        (data)        => api.post('/users', data),
   update:        (id, data)    => api.put(`/users/${id}`, data),
   deactivate:    (id)          => api.delete(`/users/${id}`),

@@ -16,6 +16,19 @@ import { requireAuth, requireRole } from '../middleware/auth.js';
 
 const router = Router();
 router.use(requireAuth);
+
+// GET /api/users/sellers — lista vendedores para filtros gerenciais (ADMIN + APPROVER)
+router.get('/sellers', requireRole('ADMIN', 'APPROVER'), async (req, res, next) => {
+  try {
+    const sellers = await prisma.user.findMany({
+      where:   { active: true, role: { in: ['COMMERCIAL', 'APPROVER', 'ADMIN'] } },
+      select:  { id: true, name: true, role: true },
+      orderBy: { name: 'asc' },
+    });
+    res.json({ sellers });
+  } catch (err) { next(err); }
+});
+
 router.use(requireRole('ADMIN'));
 
 const VALID_ROLES = ['ADMIN', 'COMMERCIAL', 'APPROVER', 'COMPRADOR'];

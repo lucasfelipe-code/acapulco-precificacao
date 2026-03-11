@@ -63,26 +63,58 @@ router.get('/', async (req, res, next) => {
 });
 
 // ─── GET /api/quotes/stats/summary ───────────────────────────────────────────
+// Query (ADMIN/APPROVER apenas): dateFrom, dateTo, userId
 router.get('/stats/summary', async (req, res, next) => {
   try {
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const where = req.user.role === 'COMMERCIAL' ? { createdBy: req.user.id } : {};
+    const isManager = req.user.role === 'ADMIN' || req.user.role === 'APPROVER';
 
-    const [total, pending, approved, recentValue] = await Promise.all([
+    // Base: vendedor só vê os próprios
+    let where = req.user.role === 'COMMERCIAL' ? { createdBy: req.user.id } : {};
+
+    // Filtros gerenciais
+    if (isManager) {
+      const { dateFrom, dateTo, userId } = req.query;
+      if (dateFrom || dateTo) {
+        where.createdAt = {};
+        if (dateFrom) where.createdAt.gte = new Date(dateFrom);
+        if (dateTo) {
+          const end = new Date(dateTo);
+          end.setHours(23, 59, 59, 999);
+          where.createdAt.lte = end;
+        }
+      }
+      if (userId) where.createdBy = parseInt(userId);
+    }
+
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const valueWindow   = (where.createdAt ?? { gte: thirtyDaysAgo });
+
+    const [total, pending, approved, rejected, draft, recentValue, byUser] = await Promise.all([
       prisma.quote.count({ where }),
       prisma.quote.count({ where: { ...where, status: 'PENDING_APPROVAL' } }),
       prisma.quote.count({ where: { ...where, status: 'APPROVED' } }),
+      prisma.quote.count({ where: { ...where, status: 'REJECTED' } }),
+      prisma.quote.count({ where: { ...where, status: 'DRAFT' } }),
       prisma.quote.aggregate({
-        where: { ...where, createdAt: { gte: thirtyDaysAgo }, status: { in: ['APPROVED', 'PENDING_APPROVAL'] } },
+        where: { ...where, createdAt: valueWindow, status: { in: ['APPROVED', 'PENDING_APPROVAL'] } },
         _sum:  { totalOrderValue: true },
       }),
+      // Breakdown por vendedor (somente para admin/approver sem filtro de user)
+      isManager && !req.query.userId
+        ? prisma.quote.groupBy({
+            by: ['createdBy'],
+            where,
+            _count: { id: true },
+            _sum:   { totalOrderValue: true },
+          })
+        : Promise.resolve([]),
     ]);
 
     res.json({
-      total,
-      pending,
-      approved,
-      valueLastThirtyDays: recentValue._sum.totalOrderValue ?? 0,
+      total, pending, approved, rejected, draft,
+      approvedValueLast30Days: recentValue._sum.totalOrderValue ?? 0,
+      byStatus: { PENDING_APPROVAL: pending, APPROVED: approved, REJECTED: rejected, DRAFT: draft },
+      byUser,
     });
   } catch (err) { next(err); }
 });
