@@ -56,6 +56,11 @@ function buildSearchVariants(query) {
   const trimmed = String(query || '').trim();
   if (!trimmed) return [''];
 
+  const prefixes = [];
+  for (let len = Math.min(trimmed.length - 1, 4); len >= 2; len -= 1) {
+    prefixes.push(trimmed.slice(0, len));
+  }
+
   const titleCase = trimmed
     .toLowerCase()
     .split(/\s+/)
@@ -63,7 +68,15 @@ function buildSearchVariants(query) {
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
 
-  return [...new Set([trimmed, trimmed.toUpperCase(), trimmed.toLowerCase(), titleCase])];
+  return [...new Set([
+    trimmed,
+    trimmed.toUpperCase(),
+    trimmed.toLowerCase(),
+    titleCase,
+    ...prefixes,
+    ...prefixes.map((value) => value.toUpperCase()),
+    ...prefixes.map((value) => value.toLowerCase()),
+  ])];
 }
 
 function scoreClientMatch(client, query) {
@@ -110,7 +123,7 @@ router.get('/', async (req, res, next) => {
     const searchVariants = buildSearchVariants(q);
 
     const [erpResults, localResults] = await Promise.allSettled([
-      Promise.allSettled(searchVariants.map((variant) => getEntidades(variant, 20))),
+      Promise.allSettled(searchVariants.map((variant) => getEntidades(variant, 50))),
       prisma.manualClient.findMany({
         where: {
           active: true,
@@ -144,8 +157,16 @@ router.get('/', async (req, res, next) => {
     // Se a busca direta vier vazia, carrega um lote maior e filtra localmente.
     if (q && ranked.length === 0) {
       try {
-        const broadErp = await getEntidades('', 200);
-        deduped = dedupeClients([...broadErp.map(mapEntidade), ...local]);
+        const fallbackTerms = [...new Set(['', ...searchVariants.slice(-4)])];
+        const fallbackResults = await Promise.allSettled(
+          fallbackTerms.map((term) => getEntidades(term, 100))
+        );
+        const broadErp = fallbackResults
+          .filter((result) => result.status === 'fulfilled')
+          .flatMap((result) => result.value)
+          .map(mapEntidade);
+
+        deduped = dedupeClients([...broadErp, ...local]);
         ranked = rankClients(deduped, q);
       } catch {
         // Mantém o resultado anterior caso o fallback amplo também falhe.
