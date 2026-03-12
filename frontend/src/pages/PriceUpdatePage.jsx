@@ -47,20 +47,34 @@ export default function PriceUpdatePage() {
 
   useEffect(() => { load(); }, [load]);
 
+  const downloadBlob = (blob, filename) => {
+    const url  = URL.createObjectURL(new Blob([blob], { type: 'text/csv;charset=utf-8;' }));
+    const link = document.createElement('a');
+    link.href  = url;
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
   const handleDownloadCSV = async () => {
     try {
       const { data } = await pricesAPI.staleCSV();
-      const url  = URL.createObjectURL(new Blob([data], { type: 'text/csv;charset=utf-8;' }));
-      const link = document.createElement('a');
-      link.href  = url;
-      link.setAttribute('download', `materiais-desatualizados-${new Date().toISOString().slice(0,10)}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      downloadBlob(data, `materiais-desatualizados-${new Date().toISOString().slice(0,10)}.csv`);
       toast.success('CSV baixado');
     } catch {
       toast.error('Erro ao gerar CSV');
+    }
+  };
+
+  const handleDownloadFabricsCSV = async () => {
+    try {
+      const { data } = await pricesAPI.fabricsCSV();
+      downloadBlob(data, `tecidos-malhas-erp-${new Date().toISOString().slice(0,10)}.csv`);
+      toast.success('CSV de tecidos/malhas baixado');
+    } catch {
+      toast.error('Erro ao gerar CSV de tecidos');
     }
   };
 
@@ -178,8 +192,11 @@ export default function PriceUpdatePage() {
               {saving ? 'Salvando...' : `Salvar ${pendingCount} preço(s)`}
             </button>
           )}
+          <button onClick={handleDownloadFabricsCSV} className="btn-secondary flex items-center gap-2 text-sm">
+            <Download className="w-4 h-4" /> Tecidos/Malhas ERP
+          </button>
           <button onClick={handleDownloadCSV} className="btn-secondary flex items-center gap-2 text-sm">
-            <Download className="w-4 h-4" /> Baixar CSV
+            <Download className="w-4 h-4" /> Desatualizados
           </button>
           <button onClick={handleRefreshCache} disabled={refreshing}
             className="btn-secondary flex items-center gap-2 text-sm disabled:opacity-50">

@@ -113,6 +113,7 @@ export const usersAPI = {
 export const pricesAPI = {
   staleReport:    ()        => api.get('/materials/stale-report'),
   staleCSV:       ()        => api.get('/materials/stale-report', { params: { format: 'csv' }, responseType: 'blob' }),
+  fabricsCSV:     ()        => api.get('/materials/fabrics-catalog', { params: { format: 'csv' }, responseType: 'blob' }),
   priceUpdate:    (updates) => api.post('/materials/price-update', { updates }),
   removeOverride: (codigo)  => api.delete(`/materials/price-override/${encodeURIComponent(codigo)}`),
   refreshCache:   ()        => api.post('/materials/catalog/refresh'),
