@@ -44,6 +44,37 @@ const FABRIC_KEYWORDS = [
   'POLIESTER', 'ALGODAO', 'VISCOSE', 'LYCRA',
 ];
 
+function normalizeText(value = '') {
+  return String(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .trim();
+}
+
+function buildSearchBlob(item) {
+  return normalizeText([
+    item.codigo,
+    item.descricao,
+    item.grupo?.descricao || item.grupo,
+    item.setor,
+    item.codigoImp,
+  ].filter(Boolean).join(' '));
+}
+
+function scoreMaterial(item, query) {
+  const q = normalizeText(query);
+  const descricao = normalizeText(item.descricao || '');
+  const grupo = normalizeText(item.grupo?.descricao || item.grupo || '');
+  const blob = buildSearchBlob(item);
+
+  if (!blob.includes(q)) return -1;
+  if (descricao.startsWith(q)) return 400;
+  if (descricao.includes(q)) return 300;
+  if (grupo.includes(q)) return 220;
+  return 100;
+}
+
 function isFabricGroup(grupo) {
   if (!grupo) return false;
   const g = grupo.toUpperCase();
@@ -76,6 +107,48 @@ function mapBase(m, similarity = null) {
     staleDays: null,
     ...(similarity !== null && { similarity }),
   };
+}
+
+function mapBomBase(m, similarity = null) {
+  const grupo = m.grupo || m.setor || null;
+  const fabric = isFabricGroup(grupo);
+  return {
+    codigo: m.codigo,
+    descricao: m.descricao || '',
+    grupo,
+    unidade: m.unidade || 'un',
+    preco: parseFloat(m.preco) || 0,
+    data: m.dataNF || null,
+    isFabric: fabric,
+    isStale: fabric ? Boolean(m.isStale) : false,
+    staleDays: fabric ? (m.staleDays ?? null) : null,
+    ...(similarity !== null && { similarity }),
+  };
+}
+
+async function getSearchCatalog() {
+  const [materialCatalog, bomCatalog] = await Promise.all([
+    getMateriaisCatalog().catch(() => []),
+    getMateriaisFromBOMs(false).catch(() => []),
+  ]);
+
+  const dedup = new Map();
+
+  materialCatalog.forEach((item) => {
+    if (!item?.codigo) return;
+    dedup.set(item.codigo, { source: 'material', item });
+  });
+
+  bomCatalog.forEach((item) => {
+    if (!item?.codigo) return;
+    if (!dedup.has(item.codigo)) {
+      dedup.set(item.codigo, { source: 'bom', item });
+    }
+  });
+
+  return Array.from(dedup.values()).map(({ source, item }) => (
+    source === 'bom' ? mapBomBase(item) : mapBase(item)
+  ));
 }
 
 /**
@@ -129,13 +202,20 @@ router.get('/search', async (req, res, next) => {
     const q = (req.query.q || '').trim().toLowerCase();
     if (q.length < 2) return res.json([]);
 
-    const catalog = await getMateriaisCatalog();
+    const catalog = await getSearchCatalog();
     const matched = catalog
-      .filter(m => m.descricao?.toLowerCase().includes(q))
+      .map((item) => ({ ...item, _score: scoreMaterial(item, q) }))
+      .filter((item) => item._score >= 0)
+      .sort((a, b) => b._score - a._score || a.descricao.localeCompare(b.descricao, 'pt-BR'))
       .slice(0, 20)
-      .map(m => mapBase(m));
+      .map(({ _score, ...item }) => item);
 
-    const enriched = await enrichWithPrices(matched);
+    const needsPrice = matched.filter((item) => !item.data && !item.preco);
+    const keep = matched.filter((item) => item.data || item.preco);
+    const enriched = needsPrice.length
+      ? [...keep, ...(await enrichWithPrices(needsPrice))]
+      : keep;
+
     res.json(enriched);
   } catch (err) {
     next(err);
@@ -162,14 +242,14 @@ router.post('/ai-suggest', async (req, res, next) => {
       return res.status(400).json({ error: 'description é obrigatório' });
     }
 
-    const catalog = await getMateriaisCatalog();
+    const catalog = await getSearchCatalog();
     if (!catalog.length) {
       return res.json({ bestMatch: null, alternatives: [] });
     }
 
     // Catálogo compacto para o prompt (codigo|descricao|grupo|unidade)
     const catalogLines = catalog
-      .map(m => `${m.codigo}|${m.descricao}|${m.grupo?.descricao || ''}|${m.unidade || 'un'}`)
+      .map(m => `${m.codigo}|${m.descricao}|${m.grupo?.descricao || m.grupo || ''}|${m.unidade || 'un'}`)
       .join('\n');
 
     const prompt = `Você é um assistente especialista em matéria-prima têxtil para uniformes.
@@ -204,7 +284,7 @@ Se não houver nenhum match com similaridade ≥ 0.80, retorne: {"bestMatch": nu
     // Mapeia códigos da IA → objetos do catálogo
     const toItem = (item) => {
       const mat = catalog.find(m => m.codigo === item.codigo);
-      return mat ? mapBase(mat, item.similarity) : null;
+      return mat ? { ...mat, similarity: item.similarity } : null;
     };
 
     const rawBest = aiResult.bestMatch ? toItem(aiResult.bestMatch) : null;
@@ -215,7 +295,11 @@ Se não houver nenhum match com similaridade ≥ 0.80, retorne: {"bestMatch": nu
 
     // Enriquece tudo em um único lote
     const allItems = [...(rawBest ? [rawBest] : []), ...rawAlt];
-    const enriched = await enrichWithPrices(allItems);
+    const needsPrice = allItems.filter((item) => !item.data && !item.preco);
+    const keep = allItems.filter((item) => item.data || item.preco);
+    const enriched = needsPrice.length
+      ? [...keep, ...(await enrichWithPrices(needsPrice))]
+      : keep;
 
     const bestMatch    = enriched[0] && rawBest ? enriched[0] : null;
     const alternatives = enriched.slice(rawBest ? 1 : 0);
