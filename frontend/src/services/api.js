@@ -77,7 +77,7 @@ export const costsAPI = {
 
 // ─── Materials (catálogo ERP + IA) ────────────────────────────────────────────
 export const materialsAPI = {
-  search:    (q)           => api.get('/materials/search', { params: { q } }),
+  search:    (q)           => api.get('/materials/search', { params: { q }, timeout: 60000 }),
   aiSuggest: (description) => api.post('/materials/ai-suggest', { description }),
   refresh:   ()            => api.post('/materials/catalog/refresh'),
 };

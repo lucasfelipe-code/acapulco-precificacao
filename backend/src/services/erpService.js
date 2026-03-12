@@ -460,6 +460,88 @@ export async function getMateriaisFromBOMs(forceRefresh = false) {
   return materiais;
 }
 
+export async function searchMateriaisFromBOMs(query, limit = 20) {
+  const term = String(query || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .trim();
+
+  if (term.length < 2) return [];
+
+  try {
+    const cached = await getMateriaisFromBOMs(false);
+    const fromCache = cached.filter((item) => {
+      const blob = `${item.codigo || ''} ${item.descricao || ''} ${item.grupo || ''} ${item.setor || ''}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+      return blob.includes(term);
+    });
+    if (fromCache.length) return fromCache.slice(0, limit);
+  } catch { /* segue para busca direcionada */ }
+
+  const produtos = [];
+  let offset = 0;
+  while (produtos.length < 400) {
+    try {
+      const page = await erpGet('/produto', { ativo: 'true', limit: 100, offset }, 12000);
+      const items = Array.isArray(page) ? page : [];
+      produtos.push(...items);
+      if (items.length < 100) break;
+      offset += 100;
+    } catch {
+      break;
+    }
+  }
+
+  const materiaisMap = new Map();
+  const BATCH = 6;
+
+  for (let i = 0; i < produtos.length && materiaisMap.size < limit; i += BATCH) {
+    const lote = produtos.slice(i, i + BATCH);
+    await Promise.allSettled(lote.map(async (produto) => {
+      try {
+        const fp = await erpGet('/formacao-preco', { produto: produto.codigo }, 12000);
+        const itens = Array.isArray(fp?.itens) ? fp.itens : (Array.isArray(fp) ? fp : []);
+        itens.filter((item) => item.abreviado === 'C').forEach((item) => {
+          const codigo = item.referencia?.codigo || item.codigo;
+          const descricao = item.referencia?.descricao || item.descricao || '';
+          const grupo = item.referencia?.grupo?.descricao || item.setor?.descricao || '';
+          const blob = `${codigo || ''} ${descricao} ${grupo}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+          if (!codigo || !blob.includes(term) || materiaisMap.has(codigo)) return;
+          materiaisMap.set(codigo, {
+            codigo,
+            descricao,
+            grupo,
+            setor: item.setor?.descricao || null,
+            unidade: item.unidade || 'un',
+            codigoImp: item.codigoImpressao || null,
+            preco: parseFloat(item.custo) || 0,
+          });
+        });
+      } catch { /* ignora produto sem bom */ }
+    }));
+  }
+
+  const materiais = Array.from(materiaisMap.values());
+  if (!materiais.length) return [];
+
+  const prices = await getPrecosMateriais(materiais.map((item) => item.codigo));
+  const priceMap = {};
+  prices.forEach((price) => { priceMap[price.codigo] = price; });
+
+  return materiais.map((item) => {
+    const price = priceMap[item.codigo];
+    if (!price) return item;
+    const dataNF = (!price.data || price.data.startsWith('1899-12-30')) ? null : price.data;
+    return {
+      ...item,
+      preco: parseFloat(price.preco1) || parseFloat(price.precoCompra) || item.preco || 0,
+      dataNF,
+      staleDays: dataNF ? Math.floor((Date.now() - new Date(dataNF).getTime()) / 86400000) : 999,
+      isStale: !dataNF || Math.floor((Date.now() - new Date(dataNF).getTime()) / 86400000) > 15,
+    };
+  });
+}
+
 function agrupar(items) {
   const map = {};
   items.forEach(m => {

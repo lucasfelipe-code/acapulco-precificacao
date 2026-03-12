@@ -25,6 +25,7 @@ import {
   getPrecosMateriais,
   diagnosticarCatalogoMateriais,
   getMateriaisFromBOMs,
+  searchMateriaisFromBOMs,
 } from '../services/erpService.js';
 
 const router = Router();
@@ -202,21 +203,21 @@ router.get('/search', async (req, res, next) => {
     const q = (req.query.q || '').trim().toLowerCase();
     if (q.length < 2) return res.json([]);
 
-    const catalog = await getSearchCatalog();
-    const matched = catalog
-      .map((item) => ({ ...item, _score: scoreMaterial(item, q) }))
+    const catalog = await getMateriaisCatalog();
+    const directMatches = catalog
+      .map((item) => ({ ...mapBase(item), _score: scoreMaterial(mapBase(item), q) }))
       .filter((item) => item._score >= 0)
       .sort((a, b) => b._score - a._score || a.descricao.localeCompare(b.descricao, 'pt-BR'))
       .slice(0, 20)
       .map(({ _score, ...item }) => item);
 
-    const needsPrice = matched.filter((item) => !item.data && !item.preco);
-    const keep = matched.filter((item) => item.data || item.preco);
-    const enriched = needsPrice.length
-      ? [...keep, ...(await enrichWithPrices(needsPrice))]
-      : keep;
+    if (directMatches.length > 0) {
+      const enriched = await enrichWithPrices(directMatches);
+      return res.json(enriched);
+    }
 
-    res.json(enriched);
+    const bomMatches = await searchMateriaisFromBOMs(q, 20);
+    res.json(bomMatches.map((item) => mapBomBase(item)));
   } catch (err) {
     next(err);
   }
