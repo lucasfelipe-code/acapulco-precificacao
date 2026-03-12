@@ -411,7 +411,14 @@ router.post('/catalog/refresh', async (req, res, next) => {
   try {
     clearMateriaisCatalogCache();
     const result = await syncErpMaterialCatalog(true);
-    res.json({ ok: true, count: result.count, groups: result.groups });
+    const localCount = await prisma.erpMaterialCatalog.count();
+    res.json({
+      ok: true,
+      count: result.count,
+      localCount,
+      groups: result.groups,
+      ...(result.warning ? { warning: result.warning } : {}),
+    });
   } catch (err) {
     next(err);
   }

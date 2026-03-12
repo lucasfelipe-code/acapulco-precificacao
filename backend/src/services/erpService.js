@@ -272,7 +272,41 @@ export async function getMateriaisCatalog() {
     if (Array.isArray(payload?.data)) return payload.data;
     if (Array.isArray(payload?.items)) return payload.items;
     if (Array.isArray(payload?.results)) return payload.results;
+    if (Array.isArray(payload?.rows)) return payload.rows;
+    if (Array.isArray(payload?.materiais)) return payload.materiais;
+    if (payload && typeof payload === 'object') {
+      const firstArray = Object.values(payload).find((value) => Array.isArray(value));
+      if (Array.isArray(firstArray)) return firstArray;
+    }
     return [];
+  };
+
+  const buildMaterialParamStrategies = (pageNumber) => ([
+    { ativo: 'true', limit: PAGE, page: pageNumber },
+    { ativo: true, limit: PAGE, page: pageNumber },
+    { ativo: 'S', limit: PAGE, page: pageNumber },
+    { limit: PAGE, page: pageNumber },
+    { ativo: 'true', limit: PAGE, page: Math.max(pageNumber - 1, 0) },
+    { ativo: 'S', limit: PAGE, page: Math.max(pageNumber - 1, 0) },
+  ]);
+
+  const fetchMaterialPage = async (pageNumber) => {
+    const attempts = [];
+    for (const params of buildMaterialParamStrategies(pageNumber)) {
+      try {
+        const data = await erpGet('/material', params, 20000);
+        const items = extractMaterialPage(data);
+        attempts.push({
+          params,
+          count: items.length,
+          shape: Array.isArray(data) ? 'array' : Object.keys(data || {}).slice(0, 8),
+        });
+        if (items.length > 0) return { items, attempts };
+      } catch (error) {
+        attempts.push({ params, error: error.message });
+      }
+    }
+    return { items: [], attempts };
   };
 
   // Pagina até não receber mais resultados (Sisplan usa page + limit)
@@ -283,17 +317,16 @@ export async function getMateriaisCatalog() {
 
   while (keepGoing) {
     try {
-      const data = await erpGet('/material', {
-        ativo: 'true',
-        limit: PAGE,
-        page: pageNumber,
-      });
-      const page = extractMaterialPage(data);
+      const { items: page, attempts } = await fetchMaterialPage(pageNumber);
       all.push(...page);
       if (page.length < PAGE) {
         keepGoing = false; // última página
       } else {
         pageNumber += 1;
+      }
+
+      if (!page.length) {
+        console.warn(`[ERP] getMateriaisCatalog page=${pageNumber} retornou 0 itens`, attempts);
       }
     } catch (e) {
       console.warn(`[ERP] getMateriaisCatalog page=${pageNumber} falhou:`, e.message);
@@ -310,7 +343,10 @@ export async function syncErpMaterialCatalog(forceRefresh = false) {
   const materials = forceRefresh ? (() => { clearMateriaisCatalogCache(); return getMateriaisCatalog(); })() : getMateriaisCatalog();
   const catalog = await materials;
 
-  if (!catalog.length) return { count: 0, groups: [] };
+  if (!catalog.length) {
+    console.warn('[ERP] syncErpMaterialCatalog: ERP retornou 0 materiais; nada foi gravado no espelho local');
+    return { count: 0, groups: [], warning: 'ERP retornou 0 materiais' };
+  }
 
   const rows = catalog.map((item) => {
     const grupoCodigo = item.grupo?.codigo != null ? String(item.grupo.codigo) : null;
