@@ -267,24 +267,36 @@ const CATALOG_TTL_MS  = 4 * 60 * 60 * 1000; // 4 horas
 export async function getMateriaisCatalog() {
   if (_materialCatalog && Date.now() < _catalogExpiry) return _materialCatalog;
 
-  // Pagina até não receber mais resultados (evita corte pelo limit)
+  const extractMaterialPage = (payload) => {
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload?.data)) return payload.data;
+    if (Array.isArray(payload?.items)) return payload.items;
+    if (Array.isArray(payload?.results)) return payload.results;
+    return [];
+  };
+
+  // Pagina até não receber mais resultados (Sisplan usa page + limit)
   const PAGE = 500;
   const all  = [];
-  let offset = 0;
+  let pageNumber = 1;
   let keepGoing = true;
 
   while (keepGoing) {
     try {
-      const data = await erpGet('/material', { ativo: 'true', limit: PAGE, offset });
-      const page = Array.isArray(data) ? data : [];
+      const data = await erpGet('/material', {
+        ativo: 'true',
+        limit: PAGE,
+        page: pageNumber,
+      });
+      const page = extractMaterialPage(data);
       all.push(...page);
       if (page.length < PAGE) {
         keepGoing = false; // última página
       } else {
-        offset += PAGE;
+        pageNumber += 1;
       }
     } catch (e) {
-      console.warn(`[ERP] getMateriaisCatalog offset=${offset} falhou:`, e.message);
+      console.warn(`[ERP] getMateriaisCatalog page=${pageNumber} falhou:`, e.message);
       keepGoing = false;
     }
   }
