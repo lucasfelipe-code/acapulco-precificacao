@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Scissors, Eye, EyeOff, Lock, Mail } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -10,8 +10,12 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const { login } = useAuthStore();
+  const { login, token } = useAuthStore();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (token) navigate('/dashboard', { replace: true });
+  }, [navigate, token]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();

@@ -26,7 +26,14 @@ router.post('/login', async (req, res, next) => {
     const token = signToken(user);
     res.json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        phone: user.phone,
+        avatarUrl: user.avatarUrl,
+      },
     });
   } catch (err) {
     next(err);
@@ -38,7 +45,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
-      select: { id: true, email: true, name: true, role: true, active: true },
+      select: { id: true, email: true, name: true, role: true, active: true, phone: true, avatarUrl: true },
     });
     if (!user) return res.status(404).json({ error: 'Usuário não encontrado' });
     res.json({ user });

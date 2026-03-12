@@ -30,10 +30,33 @@ function parseJsonField(value, fallback = null) {
 
 function decorateQuote(quote) {
   if (!quote) return quote;
+  const sizes = parseJsonField(quote.sizes, quote.sizes);
+  const approvals = Array.isArray(quote.approvals)
+    ? quote.approvals.map((approval) => ({
+        ...approval,
+        status: approval.status || approval.decision,
+        approver: approval.approver || approval.user || null,
+      }))
+    : quote.approvals;
+
   return {
     ...quote,
+    sizes,
+    createdById: quote.createdBy ?? quote.createdById ?? null,
+    createdBy: quote.user ? { ...quote.user } : quote.createdBy,
+    estimatedMargin: quote.marginPercent ?? quote.estimatedMargin ?? 0,
+    markup: quote.markupPercent ?? quote.markup ?? 0,
+    discount: quote.discountPercent ?? quote.discount ?? 0,
+    approvals,
     embroideryItems: parseJsonField(quote.embroideryItemsJson, []),
     printItems: parseJsonField(quote.printItemsJson, []),
+  };
+}
+
+function decorateQuoteListItem(quote) {
+  return {
+    ...quote,
+    createdBy: quote.user ? { ...quote.user } : quote.createdBy,
   };
 }
 
@@ -69,8 +92,8 @@ function buildCustomizationPayload(body) {
 
 function resolvePricingPayload(body, pricing) {
   return {
-    markupPercent: body.markupPercent ?? body.markup ?? pricing.markupPercent,
-    markupSource: body.markupSource ?? 'ERP',
+    markupPercent: pricing.markupPercent,
+    markupSource: body.markupSource ?? (body.markupCoeficiente ? 'ERP' : 'MANUAL'),
     discountPercent: body.discountPercent ?? body.discount ?? 0,
   };
 }
@@ -107,6 +130,7 @@ router.get('/', async (req, res, next) => {
           reference: true, productName: true, quantity: true,
           pricePerPiece: true, totalOrderValue: true,
           embroideryStatus: true,
+          urgent: true,
           createdAt: true, updatedAt: true,
           user: { select: { name: true } },
         },
@@ -114,7 +138,13 @@ router.get('/', async (req, res, next) => {
       prisma.quote.count({ where }),
     ]);
 
-    res.json({ quotes, total, page: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)) });
+    res.json({
+      quotes: quotes.map(decorateQuoteListItem),
+      total,
+      page: parseInt(page),
+      totalPages: Math.ceil(total / parseInt(limit)),
+      pages: Math.ceil(total / parseInt(limit)),
+    });
   } catch (err) { next(err); }
 });
 
@@ -285,7 +315,11 @@ router.post('/', async (req, res, next) => {
             })),
         } : undefined,
       },
-      include: { materials: true, fabricationItems: true },
+      include: {
+        materials: true,
+        fabricationItems: true,
+        user: { select: { name: true, email: true } },
+      },
     });
 
     res.status(201).json({ quote: decorateQuote(quote) });
@@ -380,7 +414,11 @@ router.put('/:id', async (req, res, next) => {
             })),
         } : undefined,
       },
-      include: { materials: true, fabricationItems: true },
+      include: {
+        materials: true,
+        fabricationItems: true,
+        user: { select: { name: true, email: true } },
+      },
     });
 
     res.json({ quote: decorateQuote(updated) });

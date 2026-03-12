@@ -13,7 +13,7 @@ const router = Router();
 router.use(requireAuth);
 
 // GET /api/costs — lista todos
-router.get('/', async (req, res, next) => {
+router.get('/', requireRole('ADMIN', 'COMPRADOR'), async (req, res, next) => {
   try {
     const { categoria } = req.query;
     const where = { active: true };
@@ -29,7 +29,7 @@ router.get('/', async (req, res, next) => {
 });
 
 // GET /api/costs/grouped — agrupado por categoria
-router.get('/grouped', async (req, res, next) => {
+router.get('/grouped', requireRole('ADMIN', 'COMPRADOR'), async (req, res, next) => {
   try {
     const costs = await prisma.manufacturingCost.findMany({
       where:   { active: true },
@@ -122,7 +122,7 @@ function normalizarCategoria(proc) {
 }
 
 // GET /api/costs/:id
-router.get('/:id', async (req, res, next) => {
+router.get('/:id', requireRole('ADMIN', 'COMPRADOR'), async (req, res, next) => {
   try {
     const cost = await prisma.manufacturingCost.findUnique({
       where: { id: parseInt(req.params.id) },

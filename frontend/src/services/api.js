@@ -16,10 +16,14 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401) {
+    const isLoginRequest = err.config?.url?.includes('/auth/login');
+
+    if (err.response?.status === 401 && !isLoginRequest) {
       localStorage.removeItem('acapulco_token');
       localStorage.removeItem('acapulco_user');
-      window.location.href = '/login';
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(err);
   }

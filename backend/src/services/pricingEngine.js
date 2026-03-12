@@ -19,6 +19,26 @@ const compactString = (value) => {
   return trimmed || null;
 };
 
+const FABRIC_FREIGHT_RATE = 0.03;
+const FABRIC_KEYWORDS = [
+  'TECIDO', 'MALHA', 'FIO', 'FIOS', 'FIBRA', 'LONA', 'BRIM', 'SARJA', 'JERSEY', 'OXFORD',
+  'HELANCA', 'PIQUET', 'MOLETON', 'SPANDEX', 'ELASTANO', 'NYLON', 'POLIESTER', 'ALGODAO',
+  'VISCOSE', 'LYCRA', 'MICROFIBRA', 'NATURAL FIT', 'DRY FIT', 'DRYFIT', 'RIBANA',
+];
+
+function getMaterialConsumption(material = {}) {
+  return toNumber(material.consumptionOverride ?? material.consumption, 1);
+}
+
+function isFabricMaterial(material = {}) {
+  const category = material.category != null ? String(material.category) : '';
+  const name = typeof material.name === 'string' ? material.name.toUpperCase() : '';
+
+  return category === '9'
+    || material.isFabric === true
+    || FABRIC_KEYWORDS.some((keyword) => name.includes(keyword));
+}
+
 export function resolveTier(basePrice, tiers, quantity) {
   if (!tiers || typeof tiers !== 'object') {
     return { cost: basePrice, tier: 'base' };
@@ -58,10 +78,18 @@ export function resolveTier(basePrice, tiers, quantity) {
 function calcMaterials(materials = []) {
   return materials
     .filter((material) => !material.removed)
-    .reduce((sum, material) => {
-      const price = material.priceOverride ?? material.unitPrice ?? 0;
-      return sum + price * (material.consumption ?? 1);
-    }, 0);
+    .reduce((acc, material) => {
+      const price = toNumber(material.priceOverride ?? material.unitPrice, 0);
+      const consumption = getMaterialConsumption(material);
+      const cost = price * consumption;
+
+      acc.materialCost += cost;
+      if (isFabricMaterial(material)) {
+        acc.fabricFreight += cost * FABRIC_FREIGHT_RATE;
+      }
+
+      return acc;
+    }, { materialCost: 0, fabricFreight: 0 });
 }
 
 function calcFabrication(fabricationItems = []) {
@@ -245,12 +273,12 @@ export function calcularCustoTotal(data) {
   const effectiveMarkupInput = markupPercent || toNumber(data.markup, 0);
   const effectiveDiscountInput = discountPercent || toNumber(data.discount, 0);
 
-  const materialCost = calcMaterials(materials);
+  const { materialCost, fabricFreight } = calcMaterials(materials);
   const fabricationCost = calcFabrication(fabricationItems);
   const embroideryCost = summarizeEmbroidery(data).totalCost;
   const printCost = summarizePrint(data).totalCost;
 
-  const subtotal = materialCost + fabricationCost + embroideryCost + printCost;
+  const subtotal = materialCost + fabricFreight + fabricationCost + embroideryCost + printCost;
   const urgencyCost = urgent ? subtotal * 0.15 : 0;
   const costPerPiece = parseFloat((subtotal + urgencyCost).toFixed(4));
 
@@ -273,6 +301,7 @@ export function calcularCustoTotal(data) {
 
   return {
     materialCost: parseFloat(materialCost.toFixed(4)),
+    fabricFreight: parseFloat(fabricFreight.toFixed(4)),
     fabricationCost: parseFloat(fabricationCost.toFixed(4)),
     embroideryCost: parseFloat(embroideryCost.toFixed(4)),
     printCost: parseFloat(printCost.toFixed(4)),

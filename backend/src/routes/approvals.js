@@ -80,7 +80,7 @@ router.post('/:quoteId/decide', requireRole('ADMIN', 'APPROVER'), async (req, re
     try {
       const quoteFull = await prisma.quote.findUnique({
         where: { id: parseInt(quoteId) },
-        select: { createdBy: true, number: true, clientName: true },
+        select: { id: true, createdBy: true, number: true, clientName: true },
       });
       if (quoteFull && quoteFull.createdBy !== req.user.id) {
         await prisma.notification.create({

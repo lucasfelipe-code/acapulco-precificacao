@@ -460,9 +460,25 @@ export async function ensureLocalMaterialCatalog() {
 
 export async function searchLocalMaterialCatalog(query, limit = 20) {
   const term = normalizeErpText(query);
-  if (term.length < 2) return [];
 
   await ensureLocalMaterialCatalog();
+
+  if (term.length < 2) {
+    const items = await prisma.erpMaterialCatalog.findMany({
+      take: limit > 0 ? limit : undefined,
+      orderBy: [{ aplicaFreshnessGuard: 'desc' }, { descricao: 'asc' }],
+    });
+
+    return items.map((item) => ({
+      codigo: item.codigo,
+      descricao: item.descricao,
+      grupo: item.grupoDescricao,
+      grupoCodigo: item.grupoCodigo,
+      unidade: item.unidade || 'un',
+      isFabric: item.aplicaFreshnessGuard,
+      tipoInterno: item.tipoInterno,
+    }));
+  }
 
   const items = await prisma.erpMaterialCatalog.findMany({
     where: {

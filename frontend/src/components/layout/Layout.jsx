@@ -60,7 +60,7 @@ function NotificationBell() {
   }, []);
 
   const notifications = data?.notifications || [];
-  const unread = data?.unreadCount || 0;
+  const unread = data?.unread ?? data?.unreadCount ?? 0;
 
   const typeColor = {
     QUOTE_APPROVED: 'text-green-600',

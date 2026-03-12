@@ -17,7 +17,7 @@
 
 import { Router } from 'express';
 import OpenAI from 'openai';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireRole } from '../middleware/auth.js';
 import prisma from '../config/database.js';
 import {
   getMateriaisCatalog,
@@ -310,7 +310,7 @@ Se não houver nenhum match com similaridade ≥ 0.80, retorne: {"bestMatch": nu
  * Suporta ?format=csv para download.
  * Retorna: codigo, descricao, grupo, unidade, preco, data, staleDays, isStale, isFabric
  */
-router.get('/fabrics-catalog', async (req, res, next) => {
+router.get('/fabrics-catalog', requireRole('ADMIN', 'COMPRADOR'), async (req, res, next) => {
   try {
     const catalog = await getMateriaisCatalog();
 
@@ -355,7 +355,7 @@ router.get('/fabrics-catalog', async (req, res, next) => {
  * ?format=csv  → download CSV
  * ?refresh=true → ignora cache e reprocessa (demora ~1-3 min)
  */
-router.get('/bom-catalog', async (req, res, next) => {
+router.get('/bom-catalog', requireRole('ADMIN', 'COMPRADOR'), async (req, res, next) => {
   try {
     const forceRefresh = req.query.refresh === 'true';
     const materiais    = await getMateriaisFromBOMs(forceRefresh);
@@ -395,7 +395,7 @@ router.get('/bom-catalog', async (req, res, next) => {
  * Uso exclusivo admin/comprador — chama o ERP diretamente (sem cache).
  * Retorna JSON com grupos encontrados em cada endpoint testado.
  */
-router.get('/erp-diagnostic', async (req, res, next) => {
+router.get('/erp-diagnostic', requireRole('ADMIN', 'COMPRADOR'), async (req, res, next) => {
   try {
     const report = await diagnosticarCatalogoMateriais();
     res.json(report);
@@ -408,7 +408,7 @@ router.get('/erp-diagnostic', async (req, res, next) => {
  * POST /api/materials/catalog/refresh
  * Força recarga do catálogo (admin/comprador utility).
  */
-router.post('/catalog/refresh', async (req, res, next) => {
+router.post('/catalog/refresh', requireRole('ADMIN', 'COMPRADOR'), async (req, res, next) => {
   try {
     clearMateriaisCatalogCache();
     const result = await syncErpMaterialCatalog(true);
@@ -452,7 +452,7 @@ router.get('/groups', async (_req, res, next) => {
  * Uso exclusivo do Comprador para gestão de preços.
  * Retorna: codigo, descricao, grupo, unidade, preco, data, staleDays
  */
-router.get('/stale-report', async (req, res, next) => {
+router.get('/stale-report', requireRole('ADMIN', 'COMPRADOR'), async (req, res, next) => {
   try {
     const catalog  = await getMateriaisCatalog();
     const codigos  = catalog.map(m => m.codigo);
@@ -514,7 +514,7 @@ router.get('/stale-report', async (req, res, next) => {
  * Comprador envia lista de correções de preço: [{ codigo, novoPreco }]
  * Armazena como overrides locais (ERP só atualiza na entrada de NF).
  */
-router.post('/price-update', async (req, res, next) => {
+router.post('/price-update', requireRole('ADMIN', 'COMPRADOR'), async (req, res, next) => {
   try {
     const { updates } = req.body; // [{ codigo, descricao, erpPreco, novoPreco, nota? }]
     if (!Array.isArray(updates) || !updates.length) {
@@ -552,7 +552,7 @@ router.post('/price-update', async (req, res, next) => {
  * DELETE /api/materials/price-override/:codigo
  * Remove override — preço volta ao ERP.
  */
-router.delete('/price-override/:codigo', async (req, res, next) => {
+router.delete('/price-override/:codigo', requireRole('ADMIN', 'COMPRADOR'), async (req, res, next) => {
   try {
     await prisma.materialPriceOverride.deleteMany({ where: { codigo: req.params.codigo } });
     res.json({ ok: true });

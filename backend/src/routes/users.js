@@ -92,9 +92,17 @@ router.put('/:id', async (req, res, next) => {
       return res.status(400).json({ error: 'Você não pode alterar sua própria role ou se desativar' });
     }
 
+    if (email?.trim()) {
+      const exists = await prisma.user.findFirst({
+        where: { email: email.trim(), NOT: { id } },
+        select: { id: true },
+      });
+      if (exists) return res.status(409).json({ error: 'E-mail já cadastrado' });
+    }
+
     const data = {};
     if (name  !== undefined) data.name   = name;
-    if (email !== undefined) data.email  = email;
+    if (email !== undefined) data.email  = email.trim();
     if (role  !== undefined) data.role   = role;
     if (active !== undefined) data.active = active;
 

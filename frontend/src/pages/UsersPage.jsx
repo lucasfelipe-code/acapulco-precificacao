@@ -29,7 +29,7 @@ function UserModal({ user, onClose, onSaved }) {
   const [form, setForm] = useState({
     name:     user?.name     || '',
     email:    user?.email    || '',
-    role:     user?.role     || 'VENDEDOR',
+    role:     user?.role     || 'COMMERCIAL',
     password: '',
     active:   user?.active   ?? true,
   });
