@@ -30,6 +30,53 @@ const normalizeFabricItem = (item = {}) => ({
   unitCost: toNumber(item.unitCost, 0),
 });
 
+const MAX_EMBROIDERY_FILE_SIZE = 8 * 1024 * 1024;
+const MAX_ANALYSIS_DIMENSION = 1600;
+const MAX_PREVIEW_DIMENSION = 320;
+
+function revokePreviewUrl(url) {
+  if (typeof url === 'string' && url.startsWith('blob:')) {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(image);
+    };
+    image.onerror = (error) => {
+      URL.revokeObjectURL(objectUrl);
+      reject(error);
+    };
+    image.src = objectUrl;
+  });
+}
+
+async function buildCompressedImage(file, maxDimension) {
+  const image = await loadImage(file);
+  const scale = Math.min(1, maxDimension / Math.max(image.width, image.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(image.width * scale));
+  canvas.height = Math.max(1, Math.round(image.height * scale));
+  canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+
+  const blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((result) => {
+      if (result) resolve(result);
+      else reject(new Error('Nao foi possivel processar a imagem'));
+    }, 'image/jpeg', 0.86);
+  });
+
+  return {
+    blob,
+    previewUrl: URL.createObjectURL(blob),
+  };
+}
+
 function ComplexityBadge({ level }) {
   if (!level) return null;
   return <span className={`text-[11px] px-2 py-0.5 rounded-full ${COMPLEXITY_MAP[level] || 'bg-gray-100 text-gray-700'}`}>{level}</span>;
@@ -60,6 +107,12 @@ export default function Step3Processes({ data, update, onNext, onBack }) {
     embroideryAPI.setupCosts().then(({ data: res }) => setSetupCosts(res)).catch(() => {});
   }, []);
 
+  useEffect(() => {
+    return () => {
+      embroideryItems.forEach((item) => revokePreviewUrl(item.previewImage));
+    };
+  }, []);
+
   function syncEmbroideryItems(items) {
     update(buildCustomizationFields(data, { embroideryItems: items }));
   }
@@ -86,6 +139,22 @@ export default function Step3Processes({ data, update, onNext, onBack }) {
     }));
   }
 
+  function removeEmbroideryItem(id) {
+    const target = embroideryItems.find((item) => item.id === id);
+    revokePreviewUrl(target?.previewImage);
+    syncEmbroideryItems(embroideryItems.filter((item) => item.id !== id));
+  }
+
+  function toggleEmbroidery(enabled) {
+    if (!enabled) {
+      embroideryItems.forEach((item) => revokePreviewUrl(item.previewImage));
+      syncEmbroideryItems([]);
+      return;
+    }
+
+    syncEmbroideryItems([createEmbroideryItem()]);
+  }
+
   async function loadFabricationCosts() {
     setLoadingFabric(true);
     try {
@@ -107,15 +176,33 @@ export default function Step3Processes({ data, update, onNext, onBack }) {
 
   async function handleEmbroideryFile(id, file) {
     if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast.error('Selecione um arquivo de imagem valido');
+      return;
+    }
+    if (file.size > MAX_EMBROIDERY_FILE_SIZE) {
+      toast.error('Imagem muito grande. Use um arquivo de ate 8MB');
+      return;
+    }
+
     const item = embroideryItems.find((entry) => entry.id === id);
-    const reader = new FileReader();
-    reader.onload = (event) => patchEmbroidery(id, { previewImage: event.target.result, imageBase64: event.target.result });
-    reader.readAsDataURL(file);
 
     setAnalyzing((prev) => ({ ...prev, [id]: true }));
     try {
+      const [analysisAsset, previewAsset] = await Promise.all([
+        buildCompressedImage(file, MAX_ANALYSIS_DIMENSION),
+        buildCompressedImage(file, MAX_PREVIEW_DIMENSION).catch(() => null),
+      ]);
+      const analysisBlob = analysisAsset.blob;
+      const nextPreviewUrl = previewAsset?.previewUrl || analysisAsset.previewUrl;
+      if (previewAsset?.previewUrl) {
+        revokePreviewUrl(analysisAsset.previewUrl);
+      }
+      revokePreviewUrl(item?.previewImage);
+      patchEmbroidery(id, { previewImage: nextPreviewUrl });
+
       const formData = new FormData();
-      formData.append('image', file);
+      formData.append('image', analysisBlob, file.name.replace(/\.[^.]+$/, '') + '.jpg');
       formData.append('pricePerK', item?.pricePerK || 0.9);
       if (toNumber(item?.widthCm, 0) > 0) formData.append('widthCm', item.widthCm);
       if (toNumber(item?.heightCm, 0) > 0) formData.append('heightCm', item.heightCm);
@@ -196,7 +283,7 @@ export default function Step3Processes({ data, update, onNext, onBack }) {
       <div className="border border-gray-200 rounded-xl overflow-hidden">
         <div className="px-4 py-3 bg-gray-50 flex items-center justify-between">
           <label className="flex items-center gap-2">
-            <input type="checkbox" checked={embroideryItems.length > 0} onChange={(e) => syncEmbroideryItems(e.target.checked ? [createEmbroideryItem()] : [])} className="w-4 h-4 text-orange-600 rounded" />
+            <input type="checkbox" checked={embroideryItems.length > 0} onChange={(e) => toggleEmbroidery(e.target.checked)} className="w-4 h-4 text-orange-600 rounded" />
             <span className="text-sm font-medium text-gray-800">Bordados</span>
           </label>
           <div className="flex items-center gap-3">
@@ -218,7 +305,7 @@ export default function Step3Processes({ data, update, onNext, onBack }) {
                     <p className="text-sm font-semibold text-gray-900">Bordado {index + 1}</p>
                     <p className="text-xs text-gray-500">Dimensoes entram na analise da IA e no calculo.</p>
                   </div>
-                  <button type="button" onClick={() => syncEmbroideryItems(embroideryItems.filter((entry) => entry.id !== item.id))} disabled={embroideryItems.length === 1} className="text-gray-400 hover:text-red-600">
+                  <button type="button" onClick={() => removeEmbroideryItem(item.id)} disabled={embroideryItems.length === 1} className="text-gray-400 hover:text-red-600">
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
@@ -259,20 +346,23 @@ export default function Step3Processes({ data, update, onNext, onBack }) {
                 {item.similarJobs?.length > 0 && (
                   <div className="grid gap-2">
                     {item.similarJobs.map((job) => (
-                      <button key={job.id} type="button" onClick={() => patchEmbroidery(item.id, {
-                        name: job.name,
-                        widthCm: toNumber(job.widthCm, 0),
-                        heightCm: toNumber(job.heightCm, 0),
-                        points: toNumber(job.confirmedPoints ?? job.estimatedPoints, 0),
-                        colorCount: toNumber(job.colorCount, 0),
-                        complexity: job.complexity,
-                        applicationCost: toNumber(job.applicationCost, 0),
-                        pricePerK: toNumber(job.pricePerK, 0.9),
-                        jobId: job.id,
-                        status: job.isConfirmed ? 'CONFIRMED' : 'ESTIMATED',
-                        previewImage: job.imageBase64 || null,
-                        similarJobs: [],
-                      })} className="text-left border border-gray-200 rounded-lg p-3 hover:border-orange-300 hover:bg-orange-50">
+                      <button key={job.id} type="button" onClick={() => {
+                        revokePreviewUrl(item.previewImage);
+                        patchEmbroidery(item.id, {
+                          name: job.name,
+                          widthCm: toNumber(job.widthCm, 0),
+                          heightCm: toNumber(job.heightCm, 0),
+                          points: toNumber(job.confirmedPoints ?? job.estimatedPoints, 0),
+                          colorCount: toNumber(job.colorCount, 0),
+                          complexity: job.complexity,
+                          applicationCost: toNumber(job.applicationCost, 0),
+                          pricePerK: toNumber(job.pricePerK, 0.9),
+                          jobId: job.id,
+                          status: job.isConfirmed ? 'CONFIRMED' : 'ESTIMATED',
+                          previewImage: job.imageBase64 || null,
+                          similarJobs: [],
+                        });
+                      }} className="text-left border border-gray-200 rounded-lg p-3 hover:border-orange-300 hover:bg-orange-50">
                         <p className="text-sm font-medium">{job.name}</p>
                         <p className="text-xs text-gray-500">R$ {toNumber(job.applicationCost, 0).toFixed(2)}/peca</p>
                       </button>

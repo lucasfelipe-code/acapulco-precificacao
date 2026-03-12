@@ -65,11 +65,17 @@ app.use('/api/materials', materialsRoutes);
 app.use('/api/users', usersRoutes);
 
 app.use((err, _req, res, _next) => {
-  const status = err.status || err.statusCode || 500;
+  const status = err.name === 'MulterError' && err.code === 'LIMIT_FILE_SIZE'
+    ? 413
+    : err.status || err.statusCode || 500;
   console.error(`[ERROR] ${status}:`, err.message);
   res.status(status).json({
-    error: err.message || 'Erro interno do servidor',
-    code: err.code || 'INTERNAL_ERROR',
+    error: err.name === 'MulterError' && err.code === 'LIMIT_FILE_SIZE'
+      ? 'Imagem muito grande. Envie um arquivo menor.'
+      : err.message || 'Erro interno do servidor',
+    code: err.name === 'MulterError' && err.code === 'LIMIT_FILE_SIZE'
+      ? 'IMAGE_TOO_LARGE'
+      : err.code || 'INTERNAL_ERROR',
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
   });
 });

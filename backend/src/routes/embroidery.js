@@ -7,6 +7,7 @@ import { requireAuth } from '../middleware/auth.js';
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const EMBROIDERY_AI_MODEL = process.env.EMBROIDERY_AI_MODEL || 'gpt-4o-mini';
 
 const PRICE_PER_K = parseFloat(process.env.EMBROIDERY_PRICE_PER_K || '0.90');
 
@@ -65,6 +66,10 @@ router.get('/setup-costs', requireAuth, async (_req, res, next) => {
 
 router.post('/analyze', requireAuth, upload.single('image'), async (req, res, next) => {
   try {
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(503).json({ error: 'Analise de IA indisponivel no momento', code: 'AI_UNAVAILABLE' });
+    }
+
     let imageBase64;
     let mimeType = 'image/jpeg';
 
@@ -84,7 +89,7 @@ router.post('/analyze', requireAuth, upload.single('image'), async (req, res, ne
       : 'Se a imagem nao informar dimensao final, estime um tamanho usual para uniforme.';
 
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      model: EMBROIDERY_AI_MODEL,
       messages: [
         { role: 'system', content: EMBROIDERY_EXPERT_PROMPT },
         {
@@ -92,7 +97,7 @@ router.post('/analyze', requireAuth, upload.single('image'), async (req, res, ne
           content: [
             {
               type: 'image_url',
-              image_url: { url: `data:${mimeType};base64,${imageBase64}`, detail: 'high' },
+              image_url: { url: `data:${mimeType};base64,${imageBase64}`, detail: 'auto' },
             },
             {
               type: 'text',
@@ -134,8 +139,14 @@ router.post('/analyze', requireAuth, upload.single('image'), async (req, res, ne
       similar,
     });
   } catch (err) {
+    if (err?.name === 'MulterError' && err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: 'Imagem muito grande. Envie um arquivo de ate 5MB', code: 'IMAGE_TOO_LARGE' });
+    }
     if (err instanceof SyntaxError) {
       return res.status(502).json({ error: 'Resposta da IA nao e JSON valido', code: 'AI_PARSE_ERROR' });
+    }
+    if (err?.status >= 400 || err?.code?.startsWith?.('invalid_')) {
+      return res.status(502).json({ error: 'Falha ao processar imagem na IA', code: 'AI_REQUEST_FAILED' });
     }
     next(err);
   }

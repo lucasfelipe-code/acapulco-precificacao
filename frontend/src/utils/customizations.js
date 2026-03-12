@@ -30,7 +30,6 @@ export const createEmbroideryItem = () => ({
   status: 'ESTIMATED',
   jobId: null,
   previewImage: null,
-  imageBase64: null,
   similarJobs: [],
 });
 
