@@ -1,18 +1,18 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { CheckCircle, XCircle, RotateCcw } from 'lucide-react';
+import { CheckCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { approvalsAPI } from '../services/api';
-import { formatCurrency, formatDate } from '../utils/format';
+import { formatCurrency } from '../utils/format';
 
-const DecisionModal = ({ approval, onClose, onDecide }) => {
+const DecisionModal = ({ quote, onClose, onDecide }) => {
   const [decision, setDecision] = useState('APPROVED');
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handle = async () => {
     setLoading(true);
-    await onDecide(approval.quoteId, decision, notes);
+    await onDecide(quote.id, decision, notes);
     setLoading(false);
     onClose();
   };
@@ -20,18 +20,21 @@ const DecisionModal = ({ approval, onClose, onDecide }) => {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="card p-6 w-full max-w-md">
-        <h3 className="font-semibold text-gray-900 mb-1">Decisão de Aprovação</h3>
-        <p className="text-sm text-gray-500 mb-4">{approval.quote.number} — {approval.quote.clientName}</p>
+        <h3 className="font-semibold text-gray-900 mb-1">Decisao de Aprovacao</h3>
+        <p className="text-sm text-gray-500 mb-4">{quote.number} - {quote.clientName}</p>
 
         <div className="space-y-2 mb-4">
           {[
-            { value: 'APPROVED', label: '✅ Aprovar', color: 'border-green-400 bg-green-50 text-green-800' },
-            { value: 'REJECTED', label: '❌ Rejeitar', color: 'border-red-400 bg-red-50 text-red-800' },
-            { value: 'REVISION_REQUESTED', label: '🔄 Solicitar Revisão', color: 'border-blue-400 bg-blue-50 text-blue-800' },
+            { value: 'APPROVED', label: 'Aprovar', color: 'border-green-400 bg-green-50 text-green-800' },
+            { value: 'REJECTED', label: 'Rejeitar', color: 'border-red-400 bg-red-50 text-red-800' },
+            { value: 'REVISION_REQUESTED', label: 'Solicitar Revisao', color: 'border-blue-400 bg-blue-50 text-blue-800' },
           ].map((opt) => (
-            <label key={opt.value} className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${
-              decision === opt.value ? opt.color : 'border-gray-200'
-            }`}>
+            <label
+              key={opt.value}
+              className={`flex items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${
+                decision === opt.value ? opt.color : 'border-gray-200'
+              }`}
+            >
               <input type="radio" name="decision" value={opt.value} checked={decision === opt.value} onChange={() => setDecision(opt.value)} />
               <span className="text-sm font-medium">{opt.label}</span>
             </label>
@@ -39,13 +42,13 @@ const DecisionModal = ({ approval, onClose, onDecide }) => {
         </div>
 
         <div className="mb-4">
-          <label className="label">Observações {decision !== 'APPROVED' ? '*' : '(opcional)'}</label>
+          <label className="label">Observacoes {decision !== 'APPROVED' ? '*' : '(opcional)'}</label>
           <textarea
             className="input"
             rows={3}
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            placeholder="Justifique sua decisão..."
+            placeholder="Justifique sua decisao..."
           />
         </div>
 
@@ -53,10 +56,10 @@ const DecisionModal = ({ approval, onClose, onDecide }) => {
           <button onClick={onClose} className="btn-secondary">Cancelar</button>
           <button
             onClick={handle}
-            disabled={loading || (decision !== 'APPROVED' && !notes)}
+            disabled={loading || (decision !== 'APPROVED' && !notes.trim())}
             className="btn-primary"
           >
-            {loading ? 'Salvando...' : 'Confirmar Decisão'}
+            {loading ? 'Salvando...' : 'Confirmar Decisao'}
           </button>
         </div>
       </div>
@@ -66,7 +69,7 @@ const DecisionModal = ({ approval, onClose, onDecide }) => {
 
 export default function ApprovalsPage() {
   const qc = useQueryClient();
-  const [selectedApproval, setSelectedApproval] = useState(null);
+  const [selectedQuote, setSelectedQuote] = useState(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['approvals', 'pending'],
@@ -75,56 +78,55 @@ export default function ApprovalsPage() {
   });
 
   const decideMutation = useMutation({
-    mutationFn: ({ quoteId, decision, notes }) =>
-      approvalsAPI.decide(quoteId, decision, notes),
+    mutationFn: ({ quoteId, decision, notes }) => approvalsAPI.decide(quoteId, decision, notes),
     onSuccess: (_, vars) => {
-      const labels = { APPROVED: 'aprovado', REJECTED: 'rejeitado', REVISION_REQUESTED: 'revisão solicitada' };
-      toast.success(`Orçamento ${labels[vars.decision]}!`);
-      qc.invalidateQueries(['approvals']);
+      const labels = {
+        APPROVED: 'aprovado',
+        REJECTED: 'rejeitado',
+        REVISION_REQUESTED: 'marcado para revisao',
+      };
+      toast.success(`Orcamento ${labels[vars.decision]}!`);
+      qc.invalidateQueries({ queryKey: ['approvals', 'pending'] });
+      qc.invalidateQueries({ queryKey: ['quotes'] });
     },
-    onError: (err) => toast.error(err.response?.data?.error || 'Erro'),
+    onError: (err) => toast.error(err.response?.data?.error || 'Erro ao decidir aprovacao'),
   });
 
-  const approvals = data?.data?.approvals || [];
+  const quotes = data?.data?.quotes || [];
 
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-xl font-bold text-gray-900">Aprovações Pendentes</h1>
-        <p className="text-sm text-gray-500">{approvals.length} aguardando sua decisão</p>
+        <h1 className="text-xl font-bold text-gray-900">Aprovacoes Pendentes</h1>
+        <p className="text-sm text-gray-500">{quotes.length} aguardando sua decisao</p>
       </div>
 
       {isLoading ? (
         <div className="text-center py-16 text-gray-400">Carregando...</div>
-      ) : approvals.length === 0 ? (
+      ) : quotes.length === 0 ? (
         <div className="card p-12 text-center">
           <CheckCircle className="w-10 h-10 text-green-400 mx-auto mb-3" />
-          <p className="text-gray-500">Nenhuma aprovação pendente!</p>
+          <p className="text-gray-500">Nenhuma aprovacao pendente.</p>
         </div>
       ) : (
         <div className="space-y-3">
-          {approvals.map((approval) => (
-            <div key={approval.id} className="card p-5">
+          {quotes.map((quote) => (
+            <div key={quote.id} className="card p-5">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="font-semibold text-gray-900">{approval.quote.number}</span>
-                    {approval.quote.urgent && <span className="text-xs text-red-600 font-medium">⚡ Urgente</span>}
+                    <span className="font-semibold text-gray-900">{quote.number}</span>
+                    {quote.urgent && <span className="text-xs text-red-600 font-medium">Urgente</span>}
                   </div>
-                  <p className="text-sm text-gray-600">{approval.quote.clientName}</p>
-                  <div className="flex gap-4 mt-2 text-xs text-gray-500">
-                    <span>Ref: {approval.quote.reference}</span>
-                    <span>{approval.quote.quantity} pcs</span>
-                    <span>{formatCurrency(approval.quote.totalOrderValue || 0)}</span>
-                    <span>Margem: {(approval.quote.estimatedMargin || 0).toFixed(1)}%</span>
-                    <span>Criado por {approval.quote.createdBy?.name}</span>
-                    <span>{formatDate(approval.createdAt)}</span>
+                  <p className="text-sm text-gray-600">{quote.clientName}</p>
+                  <div className="flex flex-wrap gap-4 mt-2 text-xs text-gray-500">
+                    <span>Ref: {quote.reference}</span>
+                    <span>{quote.quantity} pcs</span>
+                    <span>{formatCurrency(quote.totalOrderValue || 0)}</span>
+                    <span>Criado por {quote.user?.name || '-'}</span>
                   </div>
                 </div>
-                <button
-                  onClick={() => setSelectedApproval(approval)}
-                  className="btn-primary"
-                >
+                <button onClick={() => setSelectedQuote(quote)} className="btn-primary">
                   Decidir
                 </button>
               </div>
@@ -133,13 +135,11 @@ export default function ApprovalsPage() {
         </div>
       )}
 
-      {selectedApproval && (
+      {selectedQuote && (
         <DecisionModal
-          approval={selectedApproval}
-          onClose={() => setSelectedApproval(null)}
-          onDecide={(quoteId, decision, notes) =>
-            decideMutation.mutateAsync({ quoteId, decision, notes })
-          }
+          quote={selectedQuote}
+          onClose={() => setSelectedQuote(null)}
+          onDecide={(quoteId, decision, notes) => decideMutation.mutateAsync({ quoteId, decision, notes })}
         />
       )}
     </div>
