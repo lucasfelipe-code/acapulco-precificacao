@@ -44,13 +44,55 @@ function mapManual(c) {
   };
 }
 
+function normalizeText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function buildSearchVariants(query) {
+  const trimmed = String(query || '').trim();
+  if (!trimmed) return [''];
+
+  const titleCase = trimmed
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+
+  return [...new Set([trimmed, trimmed.toUpperCase(), trimmed.toLowerCase(), titleCase])];
+}
+
+function scoreClientMatch(client, query) {
+  const q = normalizeText(query);
+  if (!q) return 0;
+
+  const name = normalizeText(client.name);
+  const cnpj = normalizeText(client.cnpj);
+  const email = normalizeText(client.email);
+
+  if (name === q) return 100;
+  if (name.startsWith(q)) return 80;
+  if (name.includes(q)) return 60;
+  if (cnpj.includes(q)) return 50;
+  if (email.includes(q)) return 40;
+
+  const tokens = q.split(/\s+/).filter(Boolean);
+  const tokenHits = tokens.filter((token) => name.includes(token)).length;
+  return tokenHits > 0 ? tokenHits * 10 : -1;
+}
+
 // GET /api/clients?q=texto
 router.get('/', async (req, res, next) => {
   try {
     const q = (req.query.q || '').trim();
+    const searchVariants = buildSearchVariants(q);
 
     const [erpResults, localResults] = await Promise.allSettled([
-      getEntidades(q, 20),
+      Promise.allSettled(searchVariants.map((variant) => getEntidades(variant, 20))),
       prisma.manualClient.findMany({
         where: {
           active: true,
@@ -68,10 +110,30 @@ router.get('/', async (req, res, next) => {
       }),
     ]);
 
-    const erp   = erpResults.status   === 'fulfilled' ? erpResults.value.map(mapEntidade) : [];
-    const local = localResults.status === 'fulfilled' ? localResults.value.map(mapManual)  : [];
+    const erp = erpResults.status === 'fulfilled'
+      ? erpResults.value
+          .filter((result) => result.status === 'fulfilled')
+          .flatMap((result) => result.value)
+          .map(mapEntidade)
+      : [];
 
-    res.json([...erp, ...local]);
+    const local = localResults.status === 'fulfilled' ? localResults.value.map(mapManual) : [];
+
+    const deduped = [...erp, ...local].reduce((acc, client) => {
+      const key = `${client.source}:${client.id}`;
+      if (!acc.some((item) => `${item.source}:${item.id}` === key)) acc.push(client);
+      return acc;
+    }, []);
+
+    const ranked = q
+      ? deduped
+          .map((client) => ({ client, score: scoreClientMatch(client, q) }))
+          .filter((entry) => entry.score >= 0)
+          .sort((a, b) => b.score - a.score || a.client.name.localeCompare(b.client.name, 'pt-BR'))
+          .map((entry) => entry.client)
+      : deduped;
+
+    res.json(ranked.slice(0, 20));
   } catch (err) {
     next(err);
   }
