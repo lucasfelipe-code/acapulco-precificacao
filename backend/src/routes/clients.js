@@ -116,9 +116,24 @@ function rankClients(clients = [], query = '') {
     .map((entry) => entry.client);
 }
 
+async function getEntidadesPaged(term, pages = 5, pageSize = 100) {
+  const all = [];
+
+  for (let page = 0; page < pages; page += 1) {
+    const offset = page * pageSize;
+    const chunk = await getEntidades(term, pageSize, offset);
+    all.push(...chunk);
+    if (!Array.isArray(chunk) || chunk.length < pageSize) break;
+  }
+
+  return all;
+}
+
 // GET /api/clients?q=texto
 router.get('/', async (req, res, next) => {
   try {
+    res.set('Cache-Control', 'no-store');
+
     const q = (req.query.q || '').trim();
     const searchVariants = buildSearchVariants(q);
 
@@ -159,7 +174,7 @@ router.get('/', async (req, res, next) => {
       try {
         const fallbackTerms = [...new Set(['', ...searchVariants.slice(-4)])];
         const fallbackResults = await Promise.allSettled(
-          fallbackTerms.map((term) => getEntidades(term, 100))
+          fallbackTerms.map((term) => getEntidadesPaged(term, term ? 3 : 8, 100))
         );
         const broadErp = fallbackResults
           .filter((result) => result.status === 'fulfilled')
