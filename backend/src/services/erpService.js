@@ -518,9 +518,8 @@ export async function getProdutoByCodigo2(codigo2) {
  * @param {string} nome   - filtro por nome (opcional)
  * @param {number} limit  - máximo de resultados (padrão 30)
  */
-export async function getEntidades(nome = '', limit = 30, offset = 0) {
+export async function getEntidades(nome = '', limit = 30) {
   const params = { tipoEntidade: 'C', ativo: 'true', limit };
-  if (offset > 0) params.offset = offset;
   if (nome) params.nome = nome;
   const data = await erpGet('/entidade', params);
   return Array.isArray(data) ? data : [];
