@@ -23,6 +23,7 @@ import {
   getMateriaisCatalog,
   clearMateriaisCatalogCache,
   getPrecosMateriais,
+  diagnosticarCatalogoMateriais,
 } from '../services/erpService.js';
 
 const router = Router();
@@ -263,6 +264,21 @@ router.get('/fabrics-catalog', async (req, res, next) => {
     }
 
     res.json({ total: sorted.length, items: sorted });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/materials/erp-diagnostic
+ * Varre o ERP com múltiplas estratégias para encontrar todos os tipos de material.
+ * Uso exclusivo admin/comprador — chama o ERP diretamente (sem cache).
+ * Retorna JSON com grupos encontrados em cada endpoint testado.
+ */
+router.get('/erp-diagnostic', async (req, res, next) => {
+  try {
+    const report = await diagnosticarCatalogoMateriais();
+    res.json(report);
   } catch (err) {
     next(err);
   }

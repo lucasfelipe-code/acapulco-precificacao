@@ -259,15 +259,119 @@ const CATALOG_TTL_MS  = 4 * 60 * 60 * 1000; // 4 horas
 /**
  * Retorna catálogo completo de materiais ativos do ERP com preços.
  * Cache em memória de 4 horas — suficiente para evitar hammering no ERP.
+ * Pagina em blocos de 500 até obter todos os registros.
  */
 export async function getMateriaisCatalog() {
   if (_materialCatalog && Date.now() < _catalogExpiry) return _materialCatalog;
 
-  // /material suporta ativo + limit (ao contrário de /precomaterial que requer codigo)
-  const data = await erpGet('/material', { ativo: 'true', limit: 500 });
-  _materialCatalog = Array.isArray(data) ? data : [];
+  // Pagina até não receber mais resultados (evita corte pelo limit)
+  const PAGE = 500;
+  const all  = [];
+  let offset = 0;
+  let keepGoing = true;
+
+  while (keepGoing) {
+    try {
+      const data = await erpGet('/material', { ativo: 'true', limit: PAGE, offset });
+      const page = Array.isArray(data) ? data : [];
+      all.push(...page);
+      if (page.length < PAGE) {
+        keepGoing = false; // última página
+      } else {
+        offset += PAGE;
+      }
+    } catch (e) {
+      console.warn(`[ERP] getMateriaisCatalog offset=${offset} falhou:`, e.message);
+      keepGoing = false;
+    }
+  }
+
+  _materialCatalog = all;
   _catalogExpiry   = Date.now() + CATALOG_TTL_MS;
   return _materialCatalog;
+}
+
+/**
+ * Varredura diagnóstica do catálogo de materiais.
+ * Testa múltiplas estratégias para encontrar todos os tipos de material,
+ * incluindo tecidos/malhas que podem estar em endpoints ou filtros diferentes.
+ * NÃO usa cache — chama o ERP diretamente para diagnóstico real.
+ */
+export async function diagnosticarCatalogoMateriais() {
+  const result = {};
+
+  // ── 1. /material com ativo=true (produção normal) ────────────────────────
+  try {
+    const data = await erpGet('/material', { ativo: 'true', limit: 2000 });
+    const items = Array.isArray(data) ? data : [];
+    result.materialAtivo = {
+      total: items.length,
+      grupos: agrupar(items),
+      amostra: items.slice(0, 5),
+    };
+  } catch (e) { result.materialAtivo = { erro: e.message }; }
+
+  // ── 2. /material sem filtro de ativo (inclui inativos) ───────────────────
+  try {
+    const data = await erpGet('/material', { limit: 2000 });
+    const items = Array.isArray(data) ? data : [];
+    result.materialTodos = {
+      total: items.length,
+      grupos: agrupar(items),
+    };
+  } catch (e) { result.materialTodos = { erro: e.message }; }
+
+  // ── 3. Testa endpoint /materia-prima (alguns ERPs usam este nome) ─────────
+  try {
+    const data = await erpGet('/materia-prima', { limit: 100 });
+    result.materiaPrima = { total: Array.isArray(data) ? data.length : 0, amostra: Array.isArray(data) ? data.slice(0, 3) : data };
+  } catch (e) { result.materiaPrima = { erro: e.message }; }
+
+  // ── 4. Testa endpoint /insumo ─────────────────────────────────────────────
+  try {
+    const data = await erpGet('/insumo', { limit: 100 });
+    result.insumo = { total: Array.isArray(data) ? data.length : 0, amostra: Array.isArray(data) ? data.slice(0, 3) : data };
+  } catch (e) { result.insumo = { erro: e.message }; }
+
+  // ── 5. /precomaterial sem filtro — retorna tudo com preço ────────────────
+  try {
+    const data = await erpGet('/precomaterial', { limit: 100 });
+    const items = Array.isArray(data) ? data : [];
+    result.precoMaterial = { total: items.length, amostra: items.slice(0, 5) };
+  } catch (e) { result.precoMaterial = { erro: e.message }; }
+
+  // ── 6. BOM de um produto conhecido para ver estrutura de tecidos ──────────
+  try {
+    const produtos = await erpGet('/produto', { ativo: 'true', limit: 5 });
+    if (Array.isArray(produtos) && produtos.length > 0) {
+      const ref = produtos[0].codigo;
+      const consumo = await erpGet(`/consumo/${ref}`);
+      result.bomAmostra = {
+        produto: ref,
+        itens: Array.isArray(consumo) ? consumo.map(i => ({
+          codigo:       i.referencia?.codigo || i.codigo,
+          descricao:    i.referencia?.descricao || i.descricao,
+          abreviado:    i.abreviado,
+          setor:        i.setor,
+          grupo:        i.referencia?.grupo || i.grupo,
+          codigoImp:    i.codigoImpressao,
+        })) : consumo,
+      };
+    }
+  } catch (e) { result.bomAmostra = { erro: e.message }; }
+
+  return result;
+}
+
+function agrupar(items) {
+  const map = {};
+  items.forEach(m => {
+    const g = m.grupo?.descricao || m.grupo || '(sem grupo)';
+    map[g] = (map[g] || 0) + 1;
+  });
+  return Object.entries(map)
+    .sort((a, b) => b[1] - a[1])
+    .map(([grupo, count]) => ({ grupo, count }));
 }
 
 /**
