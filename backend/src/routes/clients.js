@@ -85,6 +85,24 @@ function scoreClientMatch(client, query) {
   return tokenHits > 0 ? tokenHits * 10 : -1;
 }
 
+function dedupeClients(clients = []) {
+  return clients.reduce((acc, client) => {
+    const key = `${client.source}:${client.id}`;
+    if (!acc.some((item) => `${item.source}:${item.id}` === key)) acc.push(client);
+    return acc;
+  }, []);
+}
+
+function rankClients(clients = [], query = '') {
+  if (!query) return clients;
+
+  return clients
+    .map((client) => ({ client, score: scoreClientMatch(client, query) }))
+    .filter((entry) => entry.score >= 0)
+    .sort((a, b) => b.score - a.score || a.client.name.localeCompare(b.client.name, 'pt-BR'))
+    .map((entry) => entry.client);
+}
+
 // GET /api/clients?q=texto
 router.get('/', async (req, res, next) => {
   try {
@@ -119,21 +137,23 @@ router.get('/', async (req, res, next) => {
 
     const local = localResults.status === 'fulfilled' ? localResults.value.map(mapManual) : [];
 
-    const deduped = [...erp, ...local].reduce((acc, client) => {
-      const key = `${client.source}:${client.id}`;
-      if (!acc.some((item) => `${item.source}:${item.id}` === key)) acc.push(client);
-      return acc;
-    }, []);
+    let deduped = dedupeClients([...erp, ...local]);
+    let ranked = rankClients(deduped, q);
 
-    const ranked = q
-      ? deduped
-          .map((client) => ({ client, score: scoreClientMatch(client, q) }))
-          .filter((entry) => entry.score >= 0)
-          .sort((a, b) => b.score - a.score || a.client.name.localeCompare(b.client.name, 'pt-BR'))
-          .map((entry) => entry.client)
-      : deduped;
+    // Fallback: alguns ERPs só retornam bem em buscas amplas.
+    // Se a busca direta vier vazia, carrega um lote maior e filtra localmente.
+    if (q && ranked.length === 0) {
+      try {
+        const broadErp = await getEntidades('', 200);
+        deduped = dedupeClients([...broadErp.map(mapEntidade), ...local]);
+        ranked = rankClients(deduped, q);
+      } catch {
+        // Mantém o resultado anterior caso o fallback amplo também falhe.
+      }
+    }
 
-    res.json(ranked.slice(0, 20));
+    const finalList = q ? (ranked.length > 0 ? ranked : deduped) : deduped;
+    res.json(finalList.slice(0, 20));
   } catch (err) {
     next(err);
   }
