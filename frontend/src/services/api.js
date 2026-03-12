@@ -111,12 +111,13 @@ export const usersAPI = {
 
 // ─── Preços / Comprador ───────────────────────────────────────────────────
 export const pricesAPI = {
-  staleReport:    ()        => api.get('/materials/stale-report'),
-  staleCSV:       ()        => api.get('/materials/stale-report', { params: { format: 'csv' }, responseType: 'blob' }),
-  fabricsCSV:     ()        => api.get('/materials/fabrics-catalog', { params: { format: 'csv' }, responseType: 'blob' }),
-  priceUpdate:    (updates) => api.post('/materials/price-update', { updates }),
-  removeOverride: (codigo)  => api.delete(`/materials/price-override/${encodeURIComponent(codigo)}`),
-  refreshCache:   ()        => api.post('/materials/catalog/refresh'),
+  staleReport:    ()              => api.get('/materials/stale-report'),
+  staleCSV:       ()              => api.get('/materials/stale-report', { params: { format: 'csv' }, responseType: 'blob' }),
+  fabricsCSV:     ()              => api.get('/materials/fabrics-catalog', { params: { format: 'csv' }, responseType: 'blob' }),
+  bomCatalogCSV:  (refresh=false) => api.get('/materials/bom-catalog', { params: { format: 'csv', ...(refresh ? { refresh: 'true' } : {}) }, responseType: 'blob', timeout: 300000 }),
+  priceUpdate:    (updates)       => api.post('/materials/price-update', { updates }),
+  removeOverride: (codigo)        => api.delete(`/materials/price-override/${encodeURIComponent(codigo)}`),
+  refreshCache:   ()              => api.post('/materials/catalog/refresh'),
 };
 
 // ─── Embroidery ───────────────────────────────────────────────────────────

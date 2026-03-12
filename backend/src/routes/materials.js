@@ -24,6 +24,7 @@ import {
   clearMateriaisCatalogCache,
   getPrecosMateriais,
   diagnosticarCatalogoMateriais,
+  getMateriaisFromBOMs,
 } from '../services/erpService.js';
 
 const router = Router();
@@ -261,6 +262,47 @@ router.get('/fabrics-catalog', async (req, res, next) => {
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="materiais-erp-${new Date().toISOString().slice(0,10)}.csv"`);
       return res.send('\uFEFF' + header + rows); // BOM para Excel reconhecer UTF-8
+    }
+
+    res.json({ total: sorted.length, items: sorted });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/materials/bom-catalog
+ * Catálogo de materiais extraído dos BOMs de todos os produtos.
+ * Inclui tecidos/malhas que não aparecem no endpoint /material.
+ * ?format=csv  → download CSV
+ * ?refresh=true → ignora cache e reprocessa (demora ~1-3 min)
+ */
+router.get('/bom-catalog', async (req, res, next) => {
+  try {
+    const forceRefresh = req.query.refresh === 'true';
+    const materiais    = await getMateriaisFromBOMs(forceRefresh);
+
+    // Ordena: desatualizados primeiro → grupo → nome
+    const sorted = [...materiais].sort((a, b) => {
+      if ((a.isStale ?? false) !== (b.isStale ?? false)) return (a.isStale ? -1 : 1);
+      const ga = a.grupo || '';
+      const gb = b.grupo || '';
+      if (ga !== gb) return ga.localeCompare(gb, 'pt-BR');
+      return a.descricao.localeCompare(b.descricao, 'pt-BR');
+    });
+
+    if (req.query.format === 'csv') {
+      const header = 'Código,Descrição,Grupo/Setor,Unidade,Preço ERP (R$),Data Última NF,Dias Sem Atualização,Status\n';
+      const rows   = sorted.map(m => {
+        const status = m.isStale ? 'DESATUALIZADO' : (m.dataNF ? 'OK' : 'SEM NF');
+        const data   = m.dataNF ? new Date(m.dataNF).toLocaleDateString('pt-BR') : 'nunca';
+        const dias   = m.staleDays ?? 999;
+        return `${m.codigo},"${m.descricao}","${m.grupo || m.setor || ''}",${m.unidade},${(m.preco || 0).toFixed(4)},${data},${dias},${status}`;
+      }).join('\n');
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="materiais-bom-erp-${new Date().toISOString().slice(0,10)}.csv"`);
+      return res.send('\uFEFF' + header + rows);
     }
 
     res.json({ total: sorted.length, items: sorted });

@@ -71,10 +71,25 @@ export default function PriceUpdatePage() {
   const handleDownloadFabricsCSV = async () => {
     try {
       const { data } = await pricesAPI.fabricsCSV();
-      downloadBlob(data, `tecidos-malhas-erp-${new Date().toISOString().slice(0,10)}.csv`);
-      toast.success('CSV de tecidos/malhas baixado');
+      downloadBlob(data, `materiais-erp-${new Date().toISOString().slice(0,10)}.csv`);
+      toast.success('CSV baixado');
     } catch {
-      toast.error('Erro ao gerar CSV de tecidos');
+      toast.error('Erro ao gerar CSV');
+    }
+  };
+
+  const [bomLoading, setBomLoading] = useState(false);
+  const handleDownloadBomCSV = async (refresh = false) => {
+    setBomLoading(true);
+    toast('Varrendo BOMs do ERP... pode levar até 3 minutos', { icon: '⏳', duration: 10000 });
+    try {
+      const { data } = await pricesAPI.bomCatalogCSV(refresh);
+      downloadBlob(data, `materiais-bom-erp-${new Date().toISOString().slice(0,10)}.csv`);
+      toast.success('CSV de materiais (BOM) baixado!');
+    } catch {
+      toast.error('Erro ao gerar CSV de BOM');
+    } finally {
+      setBomLoading(false);
     }
   };
 
@@ -192,8 +207,14 @@ export default function PriceUpdatePage() {
               {saving ? 'Salvando...' : `Salvar ${pendingCount} preço(s)`}
             </button>
           )}
+          <button onClick={() => handleDownloadBomCSV(false)} disabled={bomLoading}
+            className="btn-secondary flex items-center gap-2 text-sm disabled:opacity-50"
+            title="Varre BOMs de todos os produtos — inclui tecidos e malhas">
+            <Download className={`w-4 h-4 ${bomLoading ? 'animate-bounce' : ''}`} />
+            {bomLoading ? 'Varrendo...' : 'Materiais (BOM)'}
+          </button>
           <button onClick={handleDownloadFabricsCSV} className="btn-secondary flex items-center gap-2 text-sm">
-            <Download className="w-4 h-4" /> Catálogo Completo ERP
+            <Download className="w-4 h-4" /> Catálogo /material
           </button>
           <button onClick={handleDownloadCSV} className="btn-secondary flex items-center gap-2 text-sm">
             <Download className="w-4 h-4" /> Desatualizados

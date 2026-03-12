@@ -59,12 +59,12 @@ function authHeaders() {
 }
 
 // ─── Helper ────────────────────────────────────────────────────────────────────
-async function erpGet(path, params = {}) {
+async function erpGet(path, params = {}, timeout = 10000) {
   await getToken();
   const res = await axios.get(`${ERP_BASE_URL}${path}`, {
     headers: authHeaders(),
     params,
-    timeout: 10000,
+    timeout,
   });
   return res.data;
 }
@@ -293,16 +293,16 @@ export async function getMateriaisCatalog() {
 
 /**
  * Varredura diagnóstica do catálogo de materiais.
- * Testa múltiplas estratégias para encontrar todos os tipos de material,
- * incluindo tecidos/malhas que podem estar em endpoints ou filtros diferentes.
+ * Usa limites menores e timeout maior para evitar timeouts do ERP.
  * NÃO usa cache — chama o ERP diretamente para diagnóstico real.
  */
 export async function diagnosticarCatalogoMateriais() {
   const result = {};
+  const TIMEOUT = 30000; // 30s para diagnóstico
 
-  // ── 1. /material com ativo=true (produção normal) ────────────────────────
+  // ── 1. /material com ativo=true — limite seguro ───────────────────────────
   try {
-    const data = await erpGet('/material', { ativo: 'true', limit: 2000 });
+    const data = await erpGet('/material', { ativo: 'true', limit: 200 }, TIMEOUT);
     const items = Array.isArray(data) ? data : [];
     result.materialAtivo = {
       total: items.length,
@@ -311,9 +311,9 @@ export async function diagnosticarCatalogoMateriais() {
     };
   } catch (e) { result.materialAtivo = { erro: e.message }; }
 
-  // ── 2. /material sem filtro de ativo (inclui inativos) ───────────────────
+  // ── 2. /material sem filtro de ativo ─────────────────────────────────────
   try {
-    const data = await erpGet('/material', { limit: 2000 });
+    const data = await erpGet('/material', { limit: 200 }, TIMEOUT);
     const items = Array.isArray(data) ? data : [];
     result.materialTodos = {
       total: items.length,
@@ -321,46 +321,143 @@ export async function diagnosticarCatalogoMateriais() {
     };
   } catch (e) { result.materialTodos = { erro: e.message }; }
 
-  // ── 3. Testa endpoint /materia-prima (alguns ERPs usam este nome) ─────────
+  // ── 3. BOM de um produto real (formacao-preco) ────────────────────────────
   try {
-    const data = await erpGet('/materia-prima', { limit: 100 });
-    result.materiaPrima = { total: Array.isArray(data) ? data.length : 0, amostra: Array.isArray(data) ? data.slice(0, 3) : data };
-  } catch (e) { result.materiaPrima = { erro: e.message }; }
-
-  // ── 4. Testa endpoint /insumo ─────────────────────────────────────────────
-  try {
-    const data = await erpGet('/insumo', { limit: 100 });
-    result.insumo = { total: Array.isArray(data) ? data.length : 0, amostra: Array.isArray(data) ? data.slice(0, 3) : data };
-  } catch (e) { result.insumo = { erro: e.message }; }
-
-  // ── 5. /precomaterial sem filtro — retorna tudo com preço ────────────────
-  try {
-    const data = await erpGet('/precomaterial', { limit: 100 });
-    const items = Array.isArray(data) ? data : [];
-    result.precoMaterial = { total: items.length, amostra: items.slice(0, 5) };
-  } catch (e) { result.precoMaterial = { erro: e.message }; }
-
-  // ── 6. BOM de um produto conhecido para ver estrutura de tecidos ──────────
-  try {
-    const produtos = await erpGet('/produto', { ativo: 'true', limit: 5 });
+    const produtos = await erpGet('/produto', { ativo: 'true', limit: 5 }, TIMEOUT);
     if (Array.isArray(produtos) && produtos.length > 0) {
       const ref = produtos[0].codigo;
-      const consumo = await erpGet(`/consumo/${ref}`);
+      const fp  = await erpGet('/formacao-preco', { produto: ref }, TIMEOUT);
+      const itens = Array.isArray(fp?.itens) ? fp.itens : (Array.isArray(fp) ? fp : []);
       result.bomAmostra = {
         produto: ref,
-        itens: Array.isArray(consumo) ? consumo.map(i => ({
-          codigo:       i.referencia?.codigo || i.codigo,
-          descricao:    i.referencia?.descricao || i.descricao,
-          abreviado:    i.abreviado,
-          setor:        i.setor,
-          grupo:        i.referencia?.grupo || i.grupo,
-          codigoImp:    i.codigoImpressao,
-        })) : consumo,
+        totalItens: itens.length,
+        itensC: itens.filter(i => i.abreviado === 'C').map(i => ({
+          codigo:    i.referencia?.codigo || i.codigo,
+          descricao: i.referencia?.descricao || i.descricao,
+          abreviado: i.abreviado,
+          setor:     i.setor?.descricao || i.setor,
+          grupo:     i.referencia?.grupo?.descricao || i.referencia?.grupo,
+          codigoImp: i.codigoImpressao,
+          custo:     i.custo,
+        })),
+        itensM: itens.filter(i => i.abreviado === 'M').map(i => ({
+          codigo:    i.referencia?.codigo || i.codigo,
+          descricao: i.referencia?.descricao || i.descricao,
+        })),
       };
     }
   } catch (e) { result.bomAmostra = { erro: e.message }; }
 
   return result;
+}
+
+/**
+ * Constrói catálogo de materiais (abreviado="C") varrendo BOMs de todos os produtos.
+ * Esta é a única forma de obter tecidos/malhas que não estão no endpoint /material.
+ * Processo:
+ *   1. Lista todos os produtos ativos
+ *   2. Para cada produto busca /formacao-preco (em paralelo, lotes de 8)
+ *   3. Coleta itens abreviado="C" (materiais/insumos do BOM)
+ *   4. Deduplica por codigo
+ *   5. Busca preços via /precomaterial em lote
+ *
+ * Cache em DB (ErpCache) com TTL de 1 dia — varredura é cara.
+ */
+export async function getMateriaisFromBOMs(forceRefresh = false) {
+  const CACHE_KEY = 'bom:materiais:catalog';
+  const CACHE_TTL = 24 * 60 * 60 * 1000; // 1 dia
+
+  if (!forceRefresh) {
+    try {
+      const cached = await prisma.erpCache.findUnique({ where: { key: CACHE_KEY } });
+      if (cached) {
+        const age = Date.now() - new Date(cached.fetchedAt).getTime();
+        if (age < CACHE_TTL) return JSON.parse(cached.data);
+      }
+    } catch { /* ignora erro de cache */ }
+  }
+
+  // 1. Lista de todos os produtos ativos
+  const todosOsProdutos = [];
+  let offset = 0;
+  while (true) {
+    try {
+      const page = await erpGet('/produto', { ativo: 'true', limit: 200, offset }, 15000);
+      const items = Array.isArray(page) ? page : [];
+      todosOsProdutos.push(...items);
+      if (items.length < 200) break;
+      offset += 200;
+    } catch { break; }
+  }
+
+  if (!todosOsProdutos.length) return [];
+
+  // 2. Varre BOMs em lotes de 8 produtos por vez
+  const LOTE = 8;
+  const materiaisMap = {}; // codigo → item enriquecido
+
+  for (let i = 0; i < todosOsProdutos.length; i += LOTE) {
+    const lote = todosOsProdutos.slice(i, i + LOTE);
+    await Promise.allSettled(lote.map(async (prod) => {
+      try {
+        const fp    = await erpGet('/formacao-preco', { produto: prod.codigo }, 15000);
+        const itens = Array.isArray(fp?.itens) ? fp.itens : (Array.isArray(fp) ? fp : []);
+        itens.filter(i => i.abreviado === 'C').forEach(i => {
+          const cod = i.referencia?.codigo || i.codigo;
+          if (!cod || materiaisMap[cod]) return; // já visto
+          materiaisMap[cod] = {
+            codigo:     cod,
+            descricao:  i.referencia?.descricao || i.descricao || '',
+            grupo:      i.referencia?.grupo?.descricao || i.setor?.descricao || null,
+            setor:      i.setor?.descricao || null,
+            unidade:    i.unidade || 'un',
+            codigoImp:  i.codigoImpressao || null,
+            // custo do BOM (pode estar desatualizado — enriquecemos depois)
+            preco:      parseFloat(i.custo) || 0,
+          };
+        });
+      } catch { /* produto sem BOM — ignora */ }
+    }));
+  }
+
+  const materiais = Object.values(materiaisMap);
+
+  // 3. Enriquece preços via /precomaterial em lote
+  const codigos = materiais.map(m => m.codigo);
+  if (codigos.length > 0) {
+    const BATCH = 50;
+    const precos = [];
+    for (let i = 0; i < codigos.length; i += BATCH) {
+      try {
+        const data = await erpGet('/precomaterial', { codigo: codigos.slice(i, i + BATCH).join(',') }, 15000);
+        if (Array.isArray(data)) precos.push(...data);
+      } catch { /* ignora */ }
+    }
+    const precoMap = {};
+    precos.forEach(p => { precoMap[p.codigo] = p; });
+
+    materiais.forEach(m => {
+      const p = precoMap[m.codigo];
+      if (!p) return;
+      m.preco     = parseFloat(p.preco1) || parseFloat(p.precoCompra) || m.preco;
+      m.dataNF    = (!p.data || p.data.startsWith('1899-12-30')) ? null : p.data;
+      m.staleDays = m.dataNF
+        ? Math.floor((Date.now() - new Date(m.dataNF).getTime()) / 86400000)
+        : 999;
+      m.isStale   = !m.dataNF || m.staleDays > 15;
+    });
+  }
+
+  // 4. Salva no cache
+  try {
+    await prisma.erpCache.upsert({
+      where:  { key: CACHE_KEY },
+      create: { key: CACHE_KEY, data: JSON.stringify(materiais), fetchedAt: new Date() },
+      update: { data: JSON.stringify(materiais), fetchedAt: new Date() },
+    });
+  } catch { /* ignora */ }
+
+  return materiais;
 }
 
 function agrupar(items) {
