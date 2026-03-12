@@ -29,6 +29,7 @@ import {
   searchLocalMaterialCatalog,
   syncErpMaterialCatalog,
   getLocalMaterialGroups,
+  getGruposMaterialCatalog,
 } from '../services/erpService.js';
 
 const router = Router();
@@ -427,7 +428,19 @@ router.post('/catalog/refresh', async (req, res, next) => {
 router.get('/groups', async (_req, res, next) => {
   try {
     const groups = await getLocalMaterialGroups();
-    res.json({ groups });
+    if (groups.length) {
+      return res.json({ source: 'LOCAL', groups });
+    }
+
+    const erpGroups = await getGruposMaterialCatalog();
+    return res.json({
+      source: 'ERP',
+      groups: erpGroups.map((group) => ({
+        grupoCodigo: group.codigo != null ? String(group.codigo) : null,
+        grupoDescricao: group.descricao || null,
+        total: null,
+      })),
+    });
   } catch (err) {
     next(err);
   }

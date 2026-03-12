@@ -259,6 +259,41 @@ let _materialCatalog  = null;
 let _catalogExpiry    = null;
 const CATALOG_TTL_MS  = 4 * 60 * 60 * 1000; // 4 horas
 
+function extractErpArray(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.results)) return payload.results;
+  if (Array.isArray(payload?.rows)) return payload.rows;
+  if (Array.isArray(payload?.materiais)) return payload.materiais;
+  if (payload && typeof payload === 'object') {
+    const firstArray = Object.values(payload).find((value) => Array.isArray(value));
+    if (Array.isArray(firstArray)) return firstArray;
+  }
+  return [];
+}
+
+export async function getGruposMaterialCatalog() {
+  const attempts = [
+    { ativo: 'true' },
+    { ativo: true },
+    { ativo: 'S' },
+    {},
+  ];
+
+  for (const params of attempts) {
+    try {
+      const data = await erpGet('/grupo-material', params, 20000);
+      const groups = extractErpArray(data);
+      if (groups.length) return groups;
+    } catch {
+      // tenta a proxima variacao
+    }
+  }
+
+  return [];
+}
+
 /**
  * Retorna catálogo completo de materiais ativos do ERP com preços.
  * Cache em memória de 4 horas — suficiente para evitar hammering no ERP.
@@ -267,35 +302,21 @@ const CATALOG_TTL_MS  = 4 * 60 * 60 * 1000; // 4 horas
 export async function getMateriaisCatalog() {
   if (_materialCatalog && Date.now() < _catalogExpiry) return _materialCatalog;
 
-  const extractMaterialPage = (payload) => {
-    if (Array.isArray(payload)) return payload;
-    if (Array.isArray(payload?.data)) return payload.data;
-    if (Array.isArray(payload?.items)) return payload.items;
-    if (Array.isArray(payload?.results)) return payload.results;
-    if (Array.isArray(payload?.rows)) return payload.rows;
-    if (Array.isArray(payload?.materiais)) return payload.materiais;
-    if (payload && typeof payload === 'object') {
-      const firstArray = Object.values(payload).find((value) => Array.isArray(value));
-      if (Array.isArray(firstArray)) return firstArray;
-    }
-    return [];
-  };
+  const PAGE = 100;
 
-  const buildMaterialParamStrategies = (pageNumber) => ([
-    { ativo: 'true', limit: PAGE, page: pageNumber },
-    { ativo: true, limit: PAGE, page: pageNumber },
-    { ativo: 'S', limit: PAGE, page: pageNumber },
-    { limit: PAGE, page: pageNumber },
-    { ativo: 'true', limit: PAGE, page: Math.max(pageNumber - 1, 0) },
-    { ativo: 'S', limit: PAGE, page: Math.max(pageNumber - 1, 0) },
+  const buildMaterialParamStrategies = (pageNumber, extraParams = {}) => ([
+    { ...extraParams, ativo: 'true', limit: PAGE, page: pageNumber },
+    { ...extraParams, ativo: true, limit: PAGE, page: pageNumber },
+    { ...extraParams, ativo: 'S', limit: PAGE, page: pageNumber },
+    { ...extraParams, limit: PAGE, page: pageNumber },
   ]);
 
-  const fetchMaterialPage = async (pageNumber) => {
+  const fetchMaterialPage = async (pageNumber, extraParams = {}) => {
     const attempts = [];
-    for (const params of buildMaterialParamStrategies(pageNumber)) {
+    for (const params of buildMaterialParamStrategies(pageNumber, extraParams)) {
       try {
         const data = await erpGet('/material', params, 20000);
-        const items = extractMaterialPage(data);
+        const items = extractErpArray(data);
         attempts.push({
           params,
           count: items.length,
@@ -309,29 +330,51 @@ export async function getMateriaisCatalog() {
     return { items: [], attempts };
   };
 
-  // Pagina até não receber mais resultados (Sisplan usa page + limit)
-  const PAGE = 500;
-  const all  = [];
-  let pageNumber = 1;
-  let keepGoing = true;
+  const loadMaterialPages = async (extraParams = {}) => {
+    const all = [];
+    let pageNumber = 1;
+    let keepGoing = true;
 
-  while (keepGoing) {
-    try {
-      const { items: page, attempts } = await fetchMaterialPage(pageNumber);
+    while (keepGoing) {
+      const { items: page, attempts } = await fetchMaterialPage(pageNumber, extraParams);
       all.push(...page);
+
+      if (!page.length) {
+        if (pageNumber === 1) {
+          console.warn(`[ERP] getMateriaisCatalog page=${pageNumber} retornou 0 itens`, attempts);
+        }
+        keepGoing = false;
+        continue;
+      }
+
       if (page.length < PAGE) {
-        keepGoing = false; // última página
+        keepGoing = false;
       } else {
         pageNumber += 1;
       }
-
-      if (!page.length) {
-        console.warn(`[ERP] getMateriaisCatalog page=${pageNumber} retornou 0 itens`, attempts);
-      }
-    } catch (e) {
-      console.warn(`[ERP] getMateriaisCatalog page=${pageNumber} falhou:`, e.message);
-      keepGoing = false;
     }
+
+    return all;
+  };
+
+  let all = await loadMaterialPages();
+
+  if (!all.length) {
+    const groups = await getGruposMaterialCatalog();
+    const dedup = new Map();
+
+    for (const group of groups) {
+      const groupCode = group?.codigo != null ? String(group.codigo) : null;
+      if (!groupCode) continue;
+
+      const items = await loadMaterialPages({ grupo: groupCode });
+      items.forEach((item) => {
+        if (!item?.codigo) return;
+        dedup.set(String(item.codigo), item);
+      });
+    }
+
+    all = Array.from(dedup.values());
   }
 
   _materialCatalog = all;
@@ -351,8 +394,12 @@ export async function syncErpMaterialCatalog(forceRefresh = false) {
   const rows = catalog.map((item) => {
     const grupoCodigo = item.grupo?.codigo != null ? String(item.grupo.codigo) : null;
     const grupoDescricao = item.grupo?.descricao || null;
-    const subgrupoCodigo = item.subgrupo?.codigo != null ? String(item.subgrupo.codigo) : null;
-    const subgrupoDescricao = item.subgrupo?.descricao || null;
+    const subgrupoCodigo = item.subGrupo?.codigo != null
+      ? String(item.subGrupo.codigo)
+      : item.subgrupo?.codigo != null
+        ? String(item.subgrupo.codigo)
+        : null;
+    const subgrupoDescricao = item.subGrupo?.descricao || item.subgrupo?.descricao || null;
     const classification = classifyMaterialGroup({
       grupoCodigo,
       grupoDescricao,
