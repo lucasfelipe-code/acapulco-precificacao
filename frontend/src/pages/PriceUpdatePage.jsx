@@ -193,7 +193,7 @@ export default function PriceUpdatePage() {
             </button>
           )}
           <button onClick={handleDownloadFabricsCSV} className="btn-secondary flex items-center gap-2 text-sm">
-            <Download className="w-4 h-4" /> Tecidos/Malhas ERP
+            <Download className="w-4 h-4" /> Catálogo Completo ERP
           </button>
           <button onClick={handleDownloadCSV} className="btn-secondary flex items-center gap-2 text-sm">
             <Download className="w-4 h-4" /> Desatualizados

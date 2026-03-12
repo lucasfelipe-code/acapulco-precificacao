@@ -226,36 +226,39 @@ Se não houver nenhum match com similaridade ≥ 0.80, retorne: {"bestMatch": nu
 
 /**
  * GET /api/materials/fabrics-catalog
- * Todos os tecidos e malhas do catálogo ERP com preço e status de atualização.
+ * Todo o catálogo de matéria-prima do ERP com preço e status de atualização.
  * Suporta ?format=csv para download.
- * Retorna: codigo, descricao, grupo, unidade, preco, data, staleDays, isStale
+ * Retorna: codigo, descricao, grupo, unidade, preco, data, staleDays, isStale, isFabric
  */
 router.get('/fabrics-catalog', async (req, res, next) => {
   try {
-    const catalog  = await getMateriaisCatalog();
-    const fabrics  = catalog.filter(m => isFabricGroup(m.grupo?.descricao || m.grupo || ''));
+    const catalog = await getMateriaisCatalog();
 
-    // Enriquece com preços reais do ERP
-    const baseMapped = fabrics.map(m => mapBase(m));
+    // Todos os materiais — sem filtro por grupo
+    const baseMapped = catalog.map(m => mapBase(m));
     const enriched   = await enrichWithPrices(baseMapped);
 
-    // Ordena: desatualizados primeiro, depois por nome
+    // Ordena: por grupo → dentro do grupo, desatualizados primeiro → nome
     const sorted = enriched.sort((a, b) => {
+      const ga = a.grupo || '';
+      const gb = b.grupo || '';
+      if (ga !== gb) return ga.localeCompare(gb, 'pt-BR');
       if (a.isStale !== b.isStale) return a.isStale ? -1 : 1;
       return a.descricao.localeCompare(b.descricao, 'pt-BR');
     });
 
     if (req.query.format === 'csv') {
-      const header = 'Código,Descrição,Grupo,Unidade,Preço ERP (R$),Data Última NF,Dias Sem Atualização,Status\n';
+      const header = 'Código,Descrição,Grupo,Unidade,Preço ERP (R$),Data Última NF,Dias Sem Atualização,Status,Tecido/Malha\n';
       const rows   = sorted.map(m => {
-        const status = m.isStale ? 'DESATUALIZADO' : 'OK';
-        const data   = m.data ? new Date(m.data).toLocaleDateString('pt-BR') : 'nunca';
-        const dias   = m.staleDays != null ? m.staleDays : (m.isStale ? 999 : 0);
-        return `${m.codigo},"${m.descricao}","${m.grupo || ''}",${m.unidade},${m.preco.toFixed(4)},${data},${dias},${status}`;
+        const status  = m.isStale ? 'DESATUALIZADO' : 'OK';
+        const data    = m.data ? new Date(m.data).toLocaleDateString('pt-BR') : 'nunca';
+        const dias    = m.staleDays != null ? m.staleDays : (m.isStale ? 999 : 0);
+        const fabric  = m.isFabric ? 'SIM' : 'NÃO';
+        return `${m.codigo},"${m.descricao}","${m.grupo || ''}",${m.unidade},${m.preco.toFixed(4)},${data},${dias},${status},${fabric}`;
       }).join('\n');
 
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-      res.setHeader('Content-Disposition', `attachment; filename="tecidos-malhas-erp-${new Date().toISOString().slice(0,10)}.csv"`);
+      res.setHeader('Content-Disposition', `attachment; filename="materiais-erp-${new Date().toISOString().slice(0,10)}.csv"`);
       return res.send('\uFEFF' + header + rows); // BOM para Excel reconhecer UTF-8
     }
 
