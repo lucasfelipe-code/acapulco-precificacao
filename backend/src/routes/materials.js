@@ -131,6 +131,18 @@ function mapBomBase(m, similarity = null) {
   };
 }
 
+function searchCatalogEntries(items, query, limit = 20) {
+  return items
+    .map((item) => ({
+      item,
+      score: scoreMaterial(item, query),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score || String(a.item.descricao || '').localeCompare(String(b.item.descricao || ''), 'pt-BR'))
+    .slice(0, limit)
+    .map(({ item }) => item);
+}
+
 async function getSearchCatalog() {
   const local = await searchLocalMaterialCatalog('', 0).catch(() => []);
   if (local.length) return local;
@@ -202,15 +214,39 @@ router.get('/search', async (req, res, next) => {
     const q = (req.query.q || '').trim().toLowerCase();
     if (q.length < 2) return res.json([]);
 
-    const directMatches = await searchLocalMaterialCatalog(q, 20);
+    let directMatches = [];
+    try {
+      directMatches = await searchLocalMaterialCatalog(q, 20);
+    } catch (error) {
+      console.warn(`[Materials] searchLocalMaterialCatalog falhou para "${q}":`, error.message);
+    }
 
     if (directMatches.length > 0) {
       const enriched = await enrichWithPrices(directMatches);
       return res.json(enriched);
     }
 
-    const bomMatches = await searchMateriaisFromBOMs(q, 20);
-    res.json(bomMatches.map((item) => mapBomBase(item)));
+    try {
+      const materialCatalog = await getMateriaisCatalog();
+      const erpMatches = searchCatalogEntries(materialCatalog, q, 20).map((item) => mapBase(item));
+      if (erpMatches.length > 0) {
+        const enriched = await enrichWithPrices(erpMatches);
+        return res.json(enriched);
+      }
+    } catch (error) {
+      console.warn(`[Materials] getMateriaisCatalog falhou para "${q}":`, error.message);
+    }
+
+    try {
+      const bomMatches = await searchMateriaisFromBOMs(q, 20);
+      return res.json(bomMatches.map((item) => mapBomBase(item)));
+    } catch (error) {
+      console.warn(`[Materials] searchMateriaisFromBOMs falhou para "${q}":`, error.message);
+      return res.status(502).json({
+        error: 'Falha ao consultar materiais do ERP',
+        code: 'ERP_MATERIAL_SEARCH_FAILED',
+      });
+    }
   } catch (err) {
     next(err);
   }
