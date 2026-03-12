@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { Send, Save, FileDown } from 'lucide-react';
 import { formatCurrency } from '../../../utils/format';
+import { summarizeCustomizations } from '../../../utils/customizations';
 
 const calcPricing = (data) => {
   const totalMaterial = (data.materials || [])
@@ -10,8 +11,9 @@ const calcPricing = (data) => {
   const totalFabrication = (data.fabricationItems || [])
     .reduce((sum, f) => sum + (f.unitCost ?? 0) * (f.quantity ?? 1), 0);
 
-  const embroideryCost = data.embroideryCost || 0;
-  const printCost      = data.printCostPerPiece || data.printCost || 0;
+  const customization  = summarizeCustomizations(data);
+  const embroideryCost = customization.embroideryTotal;
+  const printCost      = customization.printTotal;
   const totalProcess   = totalFabrication + embroideryCost + printCost;
   const subtotal       = totalMaterial + totalProcess;
   const urgency        = data.urgent ? subtotal * 0.15 : 0;
@@ -95,12 +97,12 @@ export default function Step5Summary({ data, onBack, saving, onSaveDraft, onSubm
           {(data.fabricationItems || []).map((f, i) => (
             <Row key={i} label={f.name || f.descricao} value={formatCurrency((f.unitCost ?? 0) * (f.quantity ?? 1))} />
           ))}
-          {data.embroideryCost > 0 && (
-            <Row label={`Bordado (~${(data.embroideryPoints || 0).toLocaleString('pt-BR')} pts)`} value={formatCurrency(data.embroideryCost)} />
-          )}
-          {(data.printCostPerPiece || data.printCost) > 0 && (
-            <Row label="Estampa" value={formatCurrency(data.printCostPerPiece || data.printCost)} />
-          )}
+          {customization.embroideryItems.map((item, index) => (
+            <Row key={item.id} label={`Bordado ${index + 1}${item.position ? ` - ${item.position}` : ''}`} value={formatCurrency(item.totalCostPerPiece)} />
+          ))}
+          {customization.printItems.map((item, index) => (
+            <Row key={item.id} label={`Estampa ${index + 1}${item.position ? ` - ${item.position}` : ''}`} value={formatCurrency(item.totalCostPerPiece)} />
+          ))}
           <Row label="Total Processos" value={formatCurrency(pricing.totalProcess)} highlight />
         </div>
 

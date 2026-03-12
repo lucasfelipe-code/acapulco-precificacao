@@ -1,143 +1,285 @@
 /**
  * pricingEngine.js
- * Engine de cálculo de custo e preço de venda — Acapulco Uniformes.
- *
- * O markup do ERP (Sisplan) é DIVISÓRIO:
- *   precoVenda = custo / (1 - somaIndices/100)  =  custo × coeficiente
- *   coeficiente = 1 / (1 - somaIndices/100)
- *
- * Quando o coeficiente do ERP está disponível, usamos esse método.
- * Fallback: método aditivo  precoVenda = custo × (1 + markup/100).
- *
- * margem = (precoVenda - custo) / precoVenda × 100
+ * Engine de calculo de custo e preco de venda.
  */
 
-// ─── Resolução de Tier de Quantidade ─────────────────────────────────────────
+const toNumber = (value, fallback = 0) => {
+  const parsed = typeof value === 'number' ? value : parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const toInt = (value, fallback = 0) => {
+  const parsed = typeof value === 'number' ? value : parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const compactString = (value) => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+};
+
 export function resolveTier(basePrice, tiers, quantity) {
   if (!tiers || typeof tiers !== 'object') {
     return { cost: basePrice, tier: 'base' };
   }
 
-  const q = parseInt(quantity);
+  const q = parseInt(quantity, 10);
 
-  // Tiers de M.O. Costura (ate500, ate1000, ate3000, ate5000, acima5000)
   if (tiers.acima5000 !== undefined) {
-    if (q <= 500)  return { cost: tiers.ate500   ?? basePrice, tier: 'ate500' };
-    if (q <= 1000) return { cost: tiers.ate1000  ?? basePrice, tier: 'ate1000' };
-    if (q <= 3000) return { cost: tiers.ate3000  ?? basePrice, tier: 'ate3000' };
-    if (q <= 5000) return { cost: tiers.ate5000  ?? basePrice, tier: 'ate5000' };
+    if (q <= 500) return { cost: tiers.ate500 ?? basePrice, tier: 'ate500' };
+    if (q <= 1000) return { cost: tiers.ate1000 ?? basePrice, tier: 'ate1000' };
+    if (q <= 3000) return { cost: tiers.ate3000 ?? basePrice, tier: 'ate3000' };
+    if (q <= 5000) return { cost: tiers.ate5000 ?? basePrice, tier: 'ate5000' };
     return { cost: tiers.acima5000 ?? basePrice, tier: 'acima5000' };
   }
 
-  // Tiers de Talhação / Estamparia (ate100, ate500, ate1000, acima1000)
   if (tiers.acima1000 !== undefined) {
-    if (q <= 100)  return { cost: tiers.ate100   ?? basePrice, tier: 'ate100' };
-    if (q <= 500)  return { cost: tiers.ate500   ?? basePrice, tier: 'ate500' };
-    if (q <= 1000) return { cost: tiers.ate1000  ?? basePrice, tier: 'ate1000' };
+    if (q <= 100) return { cost: tiers.ate100 ?? basePrice, tier: 'ate100' };
+    if (q <= 500) return { cost: tiers.ate500 ?? basePrice, tier: 'ate500' };
+    if (q <= 1000) return { cost: tiers.ate1000 ?? basePrice, tier: 'ate1000' };
     return { cost: tiers.acima1000 ?? basePrice, tier: 'acima1000' };
   }
 
-  // Tiers genéricos — tenta keys em ordem crescente, pega o primeiro que comporta qty
   const sorted = Object.entries(tiers).sort(([a], [b]) => {
-    const numA = parseInt(a.replace(/\D/g, '')) || 0;
-    const numB = parseInt(b.replace(/\D/g, '')) || 0;
+    const numA = parseInt(a.replace(/\D/g, ''), 10) || 0;
+    const numB = parseInt(b.replace(/\D/g, ''), 10) || 0;
     return numA - numB;
   });
 
   for (const [key, tierCost] of sorted) {
-    const limit = parseInt(key.replace(/\D/g, '')) || Infinity;
+    const limit = parseInt(key.replace(/\D/g, ''), 10) || Infinity;
     if (q <= limit) return { cost: tierCost, tier: key };
   }
 
   return { cost: basePrice, tier: 'base' };
 }
 
-// ─── Cálculo de Custo de Materiais ───────────────────────────────────────────
 function calcMaterials(materials = []) {
   return materials
-    .filter((m) => !m.removed)
-    .reduce((sum, m) => {
-      const price = m.priceOverride ?? m.unitPrice ?? 0;
-      return sum + price * (m.consumption ?? 1);
+    .filter((material) => !material.removed)
+    .reduce((sum, material) => {
+      const price = material.priceOverride ?? material.unitPrice ?? 0;
+      return sum + price * (material.consumption ?? 1);
     }, 0);
 }
 
-// ─── Cálculo de Fabricação ────────────────────────────────────────────────────
 function calcFabrication(fabricationItems = []) {
-  return fabricationItems.reduce((sum, f) => sum + (f.unitCost ?? 0) * (f.quantity ?? 1), 0);
+  return fabricationItems.reduce((sum, item) => sum + (item.unitCost ?? 0) * (item.quantity ?? 1), 0);
 }
 
-// ─── Cálculo de Bordado ───────────────────────────────────────────────────────
-function calcEmbroidery(data) {
-  if (!data.embroideryJobId && !data.embroideryPoints) return 0;
-  const points   = data.embroideryPoints  || 0;
-  const pricePerK = data.embroideryPricePerK || 0.90;
-  return (points / 1000) * pricePerK;
+export function normalizeEmbroideryItems(items = [], quantity = 1, legacy = {}) {
+  const orderQty = Math.max(toInt(quantity, 1), 1);
+  let source = Array.isArray(items) ? items : [];
+
+  if (!source.length && (legacy.embroideryJobId || legacy.embroideryPoints || legacy.embroideryCost || legacy.hasEmbroidery)) {
+    source = [{
+      name: 'Bordado principal',
+      jobId: legacy.embroideryJobId,
+      points: legacy.embroideryPoints,
+      pricePerK: legacy.embroideryPricePerK,
+      applicationCost: legacy.embroideryCost,
+      status: legacy.embroideryStatus,
+      programCost: legacy.embroideryProgramCost,
+      isNewProgram: toNumber(legacy.embroideryProgramCost, 0) > 0,
+      widthCm: legacy.embroideryWidthCm,
+      heightCm: legacy.embroideryHeightCm,
+    }];
+  }
+
+  return source
+    .map((item, index) => {
+      const points = toInt(item.points ?? item.embroideryPoints, 0);
+      const pricePerK = toNumber(item.pricePerK ?? item.embroideryPricePerK, 0.9);
+      const explicitCost = toNumber(item.applicationCost ?? item.cost, NaN);
+      const applicationCost = Number.isFinite(explicitCost)
+        ? explicitCost
+        : points > 0
+        ? (points / 1000) * pricePerK
+        : 0;
+      const widthCm = toNumber(item.widthCm, 0);
+      const heightCm = toNumber(item.heightCm, 0);
+      const isNewProgram = Boolean(item.isNewProgram || toNumber(item.programCost, 0) > 0);
+      const programCost = isNewProgram ? toNumber(item.programCost, 0) : 0;
+      const setupCostPerPiece = programCost > 0 ? programCost / orderQty : 0;
+
+      return {
+        id: item.id ?? `emb-${index + 1}`,
+        name: compactString(item.name) || `Bordado ${index + 1}`,
+        position: compactString(item.position),
+        widthCm,
+        heightCm,
+        areaCm2: toNumber(item.areaCm2, widthCm * heightCm),
+        points,
+        colorCount: toInt(item.colorCount, 0),
+        complexity: item.complexity || null,
+        stitchTypes: Array.isArray(item.stitchTypes) ? item.stitchTypes : [],
+        technicalObservations: compactString(item.technicalObservations),
+        confidenceLevel: toNumber(item.confidenceLevel, 0),
+        pricePerK,
+        applicationCost,
+        isNewProgram,
+        programCost,
+        setupCostPerPiece,
+        totalCostPerPiece: applicationCost + setupCostPerPiece,
+        status: item.status || legacy.embroideryStatus || 'ESTIMATED',
+        jobId: item.jobId != null ? toInt(item.jobId, null) : null,
+        imageUrl: compactString(item.imageUrl),
+      };
+    })
+    .filter((item) =>
+      item.jobId ||
+      item.points > 0 ||
+      item.applicationCost > 0 ||
+      item.programCost > 0 ||
+      item.widthCm > 0 ||
+      item.heightCm > 0
+    );
 }
 
-// ─── Markup com Desconto de Volume ───────────────────────────────────────────
+export function summarizeEmbroidery(data = {}) {
+  const items = normalizeEmbroideryItems(data.embroideryItems, data.quantity, data);
+  const totalCost = items.reduce((sum, item) => sum + item.totalCostPerPiece, 0);
+  const totalProgramCost = items.reduce((sum, item) => sum + item.programCost, 0);
+  const first = items[0] || null;
+  const status = !items.length
+    ? 'NOT_APPLICABLE'
+    : items.some((item) => item.status === 'ESTIMATED')
+    ? 'ESTIMATED'
+    : items.some((item) => item.status === 'CONFIRMED')
+    ? 'CONFIRMED'
+    : 'NOT_APPLICABLE';
+
+  return {
+    items,
+    first,
+    totalCost,
+    totalProgramCost,
+    hasEmbroidery: items.length > 0,
+    status,
+  };
+}
+
+export function normalizePrintItems(items = [], quantity = 1, legacy = {}) {
+  const orderQty = Math.max(toInt(quantity, 1), 1);
+  let source = Array.isArray(items) ? items : [];
+
+  if (!source.length && (legacy.printWidthCm || legacy.printHeightCm || legacy.printCostPerPiece || legacy.hasPrint)) {
+    source = [{
+      name: 'Estampa principal',
+      type: legacy.printType,
+      widthCm: legacy.printWidthCm,
+      heightCm: legacy.printHeightCm,
+      colorCount: legacy.printColors,
+      applicationCostPerPiece: legacy.printCostPerPiece ?? legacy.printCost,
+    }];
+  }
+
+  return source
+    .map((item, index) => {
+      const widthCm = toNumber(item.widthCm, 0);
+      const heightCm = toNumber(item.heightCm, 0);
+      const screenFrameCost = Boolean(item.needsScreenFrame) ? toNumber(item.screenFrameCost, 0) : 0;
+      const screenFrameCostPerPiece = screenFrameCost > 0 ? screenFrameCost / orderQty : 0;
+      const applicationCostPerPiece = toNumber(item.applicationCostPerPiece ?? item.applicationCost ?? item.printCostPerPiece, 0);
+
+      return {
+        id: item.id ?? `print-${index + 1}`,
+        name: compactString(item.name) || `Estampa ${index + 1}`,
+        position: compactString(item.position),
+        type: item.type || item.printType || 'SILK_SCREEN',
+        widthCm,
+        heightCm,
+        areaCm2: toNumber(item.areaCm2, widthCm * heightCm),
+        colorCount: toInt(item.colorCount ?? item.printColors, 1),
+        applicationCostPerPiece,
+        needsScreenFrame: Boolean(item.needsScreenFrame),
+        screenFrameCost,
+        screenFrameCostPerPiece,
+        totalCostPerPiece: applicationCostPerPiece + screenFrameCostPerPiece,
+      };
+    })
+    .filter((item) =>
+      item.widthCm > 0 ||
+      item.heightCm > 0 ||
+      item.applicationCostPerPiece > 0 ||
+      item.screenFrameCost > 0
+    );
+}
+
+export function summarizePrint(data = {}) {
+  const items = normalizePrintItems(data.printItems, data.quantity, data);
+  const totalCost = items.reduce((sum, item) => sum + item.totalCostPerPiece, 0);
+  const totalScreenFrameCost = items.reduce((sum, item) => sum + item.screenFrameCost, 0);
+  const first = items[0] || null;
+
+  return {
+    items,
+    first,
+    totalCost,
+    totalScreenFrameCost,
+    hasPrint: items.length > 0,
+  };
+}
+
 export function resolveMarkup(markupPercent, quantity) {
   let effective = parseFloat(markupPercent) || 0;
   if (quantity >= 500) {
-    effective = Math.max(effective * 0.80, 15);
+    effective = Math.max(effective * 0.8, 15);
   } else if (quantity >= 100) {
-    effective = Math.max(effective * 0.90, 20);
+    effective = Math.max(effective * 0.9, 20);
   }
   return parseFloat(effective.toFixed(2));
 }
 
-// ─── Engine Principal ─────────────────────────────────────────────────────────
 export function calcularCustoTotal(data) {
   const {
-    materials          = [],
-    fabricationItems   = [],
-    quantity           = 1,
-    urgent             = false,
-    markupPercent      = 0,
-    markupCoeficiente  = null,  // coeficiente divisório do ERP (ex: 2.51)
-    discountPercent    = 0,
-    printCostPerPiece  = 0,
+    materials = [],
+    fabricationItems = [],
+    quantity = 1,
+    urgent = false,
+    markupPercent = 0,
+    markupCoeficiente = null,
+    discountPercent = 0,
   } = data;
+  const effectiveMarkupInput = markupPercent || toNumber(data.markup, 0);
+  const effectiveDiscountInput = discountPercent || toNumber(data.discount, 0);
 
-  const materialCost    = calcMaterials(materials);
+  const materialCost = calcMaterials(materials);
   const fabricationCost = calcFabrication(fabricationItems);
-  const embroideryCost  = calcEmbroidery(data);
-  const printCost       = parseFloat(printCostPerPiece) || 0;
+  const embroideryCost = summarizeEmbroidery(data).totalCost;
+  const printCost = summarizePrint(data).totalCost;
 
-  const subtotal        = materialCost + fabricationCost + embroideryCost + printCost;
-  const urgencyCost     = urgent ? subtotal * 0.15 : 0;
-  const costPerPiece    = parseFloat((subtotal + urgencyCost).toFixed(4));
+  const subtotal = materialCost + fabricationCost + embroideryCost + printCost;
+  const urgencyCost = urgent ? subtotal * 0.15 : 0;
+  const costPerPiece = parseFloat((subtotal + urgencyCost).toFixed(4));
 
-  // ─── Preço de venda ───────────────────────────────────────────────────────
-  // Método divisório (ERP): precoVenda = custo × coeficiente
-  // Método aditivo (fallback): precoVenda = custo × (1 + markup/100)
   let priceBeforeDiscount;
   let effectiveMarkup;
 
   if (markupCoeficiente && markupCoeficiente > 1) {
     priceBeforeDiscount = costPerPiece * markupCoeficiente;
-    // Converte para % sobre custo equivalente para exibição
     effectiveMarkup = parseFloat(((markupCoeficiente - 1) * 100).toFixed(2));
   } else {
-    effectiveMarkup     = resolveMarkup(markupPercent, quantity);
+    effectiveMarkup = resolveMarkup(effectiveMarkupInput, quantity);
     priceBeforeDiscount = costPerPiece * (1 + effectiveMarkup / 100);
   }
 
-  const pricePerPiece   = parseFloat((priceBeforeDiscount * (1 - discountPercent / 100)).toFixed(4));
+  const pricePerPiece = parseFloat((priceBeforeDiscount * (1 - effectiveDiscountInput / 100)).toFixed(4));
   const totalOrderValue = parseFloat((pricePerPiece * quantity).toFixed(2));
-  const marginPercent   = costPerPiece > 0
-    ? parseFloat(((pricePerPiece - costPerPiece) / pricePerPiece * 100).toFixed(2))
+  const marginPercent = costPerPiece > 0
+    ? parseFloat((((pricePerPiece - costPerPiece) / pricePerPiece) * 100).toFixed(2))
     : 0;
 
   return {
-    materialCost:    parseFloat(materialCost.toFixed(4)),
+    materialCost: parseFloat(materialCost.toFixed(4)),
     fabricationCost: parseFloat(fabricationCost.toFixed(4)),
-    embroideryCost:  parseFloat(embroideryCost.toFixed(4)),
-    printCost:       parseFloat(printCost.toFixed(4)),
-    urgencyCost:     parseFloat(urgencyCost.toFixed(4)),
+    embroideryCost: parseFloat(embroideryCost.toFixed(4)),
+    printCost: parseFloat(printCost.toFixed(4)),
+    urgencyCost: parseFloat(urgencyCost.toFixed(4)),
     costPerPiece,
     effectiveMarkup,
-    markupPercent:   effectiveMarkup,
+    markupPercent: effectiveMarkup,
     pricePerPiece,
     totalOrderValue,
     marginPercent,

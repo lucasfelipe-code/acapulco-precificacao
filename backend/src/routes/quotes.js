@@ -6,7 +6,7 @@
 import { Router } from 'express';
 import prisma from '../config/database.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
-import { calcularCustoTotal } from '../services/pricingEngine.js';
+import { calcularCustoTotal, summarizeEmbroidery, summarizePrint } from '../services/pricingEngine.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -17,6 +17,62 @@ async function nextQuoteNumber() {
   const seq  = (last?.id ?? 0) + 1;
   const year = new Date().getFullYear();
   return `ORC-${year}-${String(seq).padStart(4, '0')}`;
+}
+
+function parseJsonField(value, fallback = null) {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function decorateQuote(quote) {
+  if (!quote) return quote;
+  return {
+    ...quote,
+    embroideryItems: parseJsonField(quote.embroideryItemsJson, []),
+    printItems: parseJsonField(quote.printItemsJson, []),
+  };
+}
+
+function syncConfirmedEmbroideryItems(items = [], confirmedCost) {
+  return items.map((item, index) => ({
+    ...item,
+    status: 'CONFIRMED',
+    applicationCost: confirmedCost !== undefined && index === 0 ? confirmedCost : item.applicationCost,
+    totalCostPerPiece: (confirmedCost !== undefined && index === 0 ? confirmedCost : item.applicationCost) + (item.setupCostPerPiece || 0),
+  }));
+}
+
+function buildCustomizationPayload(body) {
+  const embroidery = summarizeEmbroidery(body);
+  const print = summarizePrint(body);
+
+  return {
+    embroidery,
+    print,
+    quoteData: {
+      embroideryJobId: embroidery.first?.jobId || null,
+      embroideryStatus: embroidery.status,
+      embroideryItemsJson: embroidery.items.length ? JSON.stringify(embroidery.items) : null,
+      printType: print.first?.type || null,
+      printWidthCm: print.first?.widthCm || null,
+      printHeightCm: print.first?.heightCm || null,
+      printColors: print.first?.colorCount || null,
+      printCostPerPiece: print.totalCost || null,
+      printItemsJson: print.items.length ? JSON.stringify(print.items) : null,
+    },
+  };
+}
+
+function resolvePricingPayload(body, pricing) {
+  return {
+    markupPercent: body.markupPercent ?? body.markup ?? pricing.markupPercent,
+    markupSource: body.markupSource ?? 'ERP',
+    discountPercent: body.discountPercent ?? body.discount ?? 0,
+  };
 }
 
 // ─── GET /api/quotes ──────────────────────────────────────────────────────────
@@ -140,7 +196,7 @@ router.get('/:id', async (req, res, next) => {
       return res.status(403).json({ error: 'Acesso negado' });
     }
 
-    res.json({ quote });
+    res.json({ quote: decorateQuote(quote) });
   } catch (err) { next(err); }
 });
 
@@ -148,11 +204,13 @@ router.get('/:id', async (req, res, next) => {
 router.post('/', async (req, res, next) => {
   try {
     const body = req.body;
+    const { quoteData: customizationData } = buildCustomizationPayload(body);
 
     const number = await nextQuoteNumber();
 
     // Calcula custo total via pricingEngine
     const pricing = calcularCustoTotal(body);
+    const pricingPayload = resolvePricingPayload(body, pricing);
 
     const quote = await prisma.quote.create({
       data: {
@@ -174,21 +232,14 @@ router.post('/', async (req, res, next) => {
 
         // Precificação calculada
         costPerPiece:    pricing.costPerPiece,
-        markupPercent:   body.markupPercent  ?? pricing.markupPercent,
-        markupSource:    body.markupSource   ?? 'ERP',
-        discountPercent: body.discountPercent ?? 0,
+        markupPercent:   pricingPayload.markupPercent,
+        markupSource:    pricingPayload.markupSource,
+        discountPercent: pricingPayload.discountPercent,
         pricePerPiece:   pricing.pricePerPiece,
         totalOrderValue: pricing.totalOrderValue,
         marginPercent:   pricing.marginPercent,
 
-        printType:        body.printType    || null,
-        printWidthCm:     body.printWidthCm || null,
-        printHeightCm:    body.printHeightCm|| null,
-        printColors:      body.printColors  || null,
-        printCostPerPiece: body.printCostPerPiece || null,
-
-        embroideryJobId:  body.embroideryJobId || null,
-        embroideryStatus: body.embroideryStatus || 'NOT_APPLICABLE',
+        ...customizationData,
 
         notes:         body.notes        || null,
         internalNotes: body.internalNotes|| null,
@@ -237,7 +288,7 @@ router.post('/', async (req, res, next) => {
       include: { materials: true, fabricationItems: true },
     });
 
-    res.status(201).json({ quote });
+    res.status(201).json({ quote: decorateQuote(quote) });
   } catch (err) { next(err); }
 });
 
@@ -257,6 +308,8 @@ router.put('/:id', async (req, res, next) => {
 
     const body    = req.body;
     const pricing = calcularCustoTotal(body);
+    const { quoteData: customizationData } = buildCustomizationPayload(body);
+    const pricingPayload = resolvePricingPayload(body, pricing);
 
     // Remove materiais e fabricação anteriores e recria
     await prisma.$transaction([
@@ -277,21 +330,14 @@ router.put('/:id', async (req, res, next) => {
         sizes:         body.sizes        ? JSON.stringify(body.sizes)  : quote.sizes,
 
         costPerPiece:    pricing.costPerPiece,
-        markupPercent:   body.markupPercent   ?? quote.markupPercent,
-        markupSource:    body.markupSource    ?? quote.markupSource,
-        discountPercent: body.discountPercent ?? quote.discountPercent,
+        markupPercent:   pricingPayload.markupPercent ?? quote.markupPercent,
+        markupSource:    pricingPayload.markupSource ?? quote.markupSource,
+        discountPercent: pricingPayload.discountPercent ?? quote.discountPercent,
         pricePerPiece:   pricing.pricePerPiece,
         totalOrderValue: pricing.totalOrderValue,
         marginPercent:   pricing.marginPercent,
 
-        printType:        body.printType     ?? quote.printType,
-        printWidthCm:     body.printWidthCm  ?? quote.printWidthCm,
-        printHeightCm:    body.printHeightCm ?? quote.printHeightCm,
-        printColors:      body.printColors   ?? quote.printColors,
-        printCostPerPiece: body.printCostPerPiece ?? quote.printCostPerPiece,
-
-        embroideryJobId:  body.embroideryJobId  ?? quote.embroideryJobId,
-        embroideryStatus: body.embroideryStatus ?? quote.embroideryStatus,
+        ...customizationData,
 
         notes:         body.notes        ?? quote.notes,
         internalNotes: body.internalNotes?? quote.internalNotes,
@@ -337,7 +383,7 @@ router.put('/:id', async (req, res, next) => {
       include: { materials: true, fabricationItems: true },
     });
 
-    res.json({ quote: updated });
+    res.json({ quote: decorateQuote(updated) });
   } catch (err) { next(err); }
 });
 
@@ -369,7 +415,7 @@ router.post('/:id/submit', async (req, res, next) => {
     }
 
     // Se bordado e ainda não confirmado → vai para AWAITING_EMBROIDERY
-    const nextStatus = (quote.embroideryJobId && quote.embroideryStatus === 'ESTIMATED')
+    const nextStatus = (quote.embroideryStatus === 'ESTIMATED')
       ? 'AWAITING_EMBROIDERY'
       : 'PENDING_APPROVAL';
 
@@ -390,6 +436,7 @@ router.post('/:id/confirm-embroidery', requireRole('ADMIN', 'COMPRADOR'), async 
     const { confirmedCost, notes } = req.body;
 
     const quote = await prisma.quote.findUnique({ where: { id }, include: { embroideryJob: true } });
+    const embroideryItems = parseJsonField(quote?.embroideryItemsJson, []);
     if (!quote) return res.status(404).json({ error: 'Orçamento não encontrado' });
     if (quote.status !== 'AWAITING_EMBROIDERY') {
       return res.status(400).json({ error: 'Orçamento não está aguardando bordado' });
@@ -408,6 +455,9 @@ router.post('/:id/confirm-embroidery', requireRole('ADMIN', 'COMPRADOR'), async 
       data:  {
         embroideryStatus: 'CONFIRMED',
         status:           'PENDING_APPROVAL',
+        embroideryItemsJson: embroideryItems.length
+          ? JSON.stringify(syncConfirmedEmbroideryItems(embroideryItems, confirmedCost))
+          : quote.embroideryItemsJson,
         internalNotes:    notes ? `${quote.internalNotes || ''}\n[Bordado confirmado]: ${notes}` : quote.internalNotes,
       },
     });

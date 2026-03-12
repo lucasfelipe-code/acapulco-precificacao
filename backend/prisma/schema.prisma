@@ -83,12 +83,14 @@ model Quote {
   embroideryJobId  Int?
   embroideryJob    EmbroideryJob? @relation(fields: [embroideryJobId], references: [id])
   embroideryStatus EmbroideryStatus @default(NOT_APPLICABLE)
+  embroideryItemsJson String?
 
   printType    PrintType?
   printWidthCm Float?
   printHeightCm Float?
   printColors  Int?
   printCostPerPiece Float?
+  printItemsJson String?
 
   // ─── Precificação
   costPerPiece      Float?  // custo total calculado

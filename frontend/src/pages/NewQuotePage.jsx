@@ -49,12 +49,16 @@ export default function NewQuotePage() {
 
     // Step 3 — processos (fabricação do ERP + bordado + estampa)
     fabricationItems:    [],
+    hasEmbroidery:       false,
+    embroideryItems:     [],
     embroideryPoints:    0,
     embroideryPricePerK: 0.9,
     embroideryCost:      0,
     embroideryStatus:    'NOT_APPLICABLE',
     embroideryJobId:     null,
+    embroideryProgramCost: 0,
     hasPrint:            false,
+    printItems:          [],
     printType:           null,
     printWidthCm:        0,
     printHeightCm:       0,
@@ -71,13 +75,19 @@ export default function NewQuotePage() {
 
   const update = (fields) => setFormData((prev) => ({ ...prev, ...fields }));
 
+  const buildPayload = () => ({
+    ...formData,
+    markupPercent: formData.markup,
+    discountPercent: formData.discount,
+  });
+
   const handleNext = () => setStep((s) => Math.min(s + 1, 5));
   const handleBack = () => setStep((s) => Math.max(s - 1, 1));
 
   const handleSaveDraft = async () => {
     setSaving(true);
     try {
-      const { data } = await quotesAPI.create(formData);
+      const { data } = await quotesAPI.create(buildPayload());
       toast.success(`Rascunho ${data.quote.number} salvo!`);
       navigate(`/quotes/${data.quote.id}`);
     } catch (err) {
@@ -90,7 +100,7 @@ export default function NewQuotePage() {
   const handleSubmitForApproval = async () => {
     setSaving(true);
     try {
-      const { data: createdData } = await quotesAPI.create(formData);
+      const { data: createdData } = await quotesAPI.create(buildPayload());
       await quotesAPI.submit(createdData.quote.id);
       toast.success(`Orçamento ${createdData.quote.number} enviado para aprovação!`);
       navigate('/quotes');

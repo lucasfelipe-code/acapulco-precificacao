@@ -126,6 +126,7 @@ export const embroideryAPI = {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 60000,
   }),
+  setupCosts:     ()                  => api.get('/embroidery/setup-costs'),
   calculate:      (points, pricePerK) => api.post('/embroidery/calculate', { points, pricePerK }),
   calculatePrint: (data)              => api.post('/embroidery/print-calculate', data),
   library:        (params)            => api.get('/embroidery/library', { params }),

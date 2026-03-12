@@ -586,6 +586,75 @@ function isFabricItem(item) {
   return false;
 }
 
+function mapFormacaoMaterial(item) {
+  const dateStr = item.dataAtualizacao || item.data || null;
+  const isFabric = isFabricItem(item);
+  const stale = isFabric ? isMaterialDateStale(dateStr) : false;
+  const quantity = parseFloat(item.quantidade) || 1;
+  const unitCost = parseFloat(item.custo) || 0;
+
+  return {
+    erpCode: item.referencia?.codigo || item.codigo || null,
+    name: item.referencia?.descricao || item.descricao || item.nome || 'Material',
+    category: item.codigoImpressao || null,
+    isFabric,
+    unit: item.unidade || 'un',
+    consumption: quantity,
+    unitPrice: unitCost,
+    costPerPiece: parseFloat(item.valor) || unitCost * quantity || 0,
+    erpPriceDate: (!dateStr || dateStr.startsWith(DELPHI_NULL_PREFIX)) ? null : new Date(dateStr),
+    isStale: stale,
+    staleDays: stale ? staleDaysFrom(dateStr) : null,
+    raw: item,
+  };
+}
+
+function mapConsumoMaterial(item) {
+  return {
+    erpCode: item.insumo?.codigo || item.referencia?.codigo || item.codigo || null,
+    name: item.insumo?.descricao || item.referencia?.descricao || item.descricao || item.nome || 'Material',
+    category: item.codigoImpressao || item.insumo?.codigoImpressao || null,
+    isFabric: isFabricItem(item),
+    unit: item.unidade || item.insumo?.unidade || 'un',
+    consumption: parseFloat(item.quantidade || item.consumo) || 1,
+    unitPrice: 0,
+    costPerPiece: 0,
+    erpPriceDate: null,
+    isStale: false,
+    staleDays: null,
+    raw: item,
+  };
+}
+
+async function enrichMaterialPrices(materials = []) {
+  const codes = [...new Set(materials.map((item) => item.erpCode).filter(Boolean))];
+  if (!codes.length) return materials;
+
+  const prices = await getPrecosMateriais(codes);
+  const map = {};
+  prices.forEach((price) => { map[price.codigo] = price; });
+
+  return materials.map((item) => {
+    const price = map[item.erpCode];
+    if (!price) return item;
+
+    const dateStr = price.data || price.dataAtualizacao || null;
+    const unitPrice = parseFloat(price.preco1) || parseFloat(price.precoCompra) || item.unitPrice || 0;
+    const isFabric = item.isFabric;
+    const stale = isFabric ? isMaterialDateStale(dateStr || '') : false;
+
+    return {
+      ...item,
+      unitPrice,
+      costPerPiece: unitPrice * (parseFloat(item.consumption) || 1),
+      erpPriceDate: (!dateStr || dateStr.startsWith(DELPHI_NULL_PREFIX)) ? null : new Date(dateStr),
+      isStale: stale,
+      staleDays: stale ? staleDaysFrom(dateStr) : null,
+      rawPrice: price,
+    };
+  });
+}
+
 /**
  * Busca completa para o wizard de orçamento usando /formacao-preco como fonte primária.
  * Esse endpoint do Sisplan retorna BOM completo + custos de processo já calculados.
@@ -621,29 +690,23 @@ export async function getDadosProdutoParaOrcamento(referencia, forceRefresh = fa
   // ─── Materiais (abreviado = "C") ───────────────────────────────────────────
   // Guard 15 dias APENAS para tecidos/malhas (isFabricItem=true).
   // Acessórios, botões, embalagens → sem guard de preço.
-  const materials = itens
+  let materials = itens
     .filter(item => item.abreviado === 'C')
-    .map(item => {
-      const dateStr    = item.dataAtualizacao || item.data || null;
-      const isFabric   = isFabricItem(item); // tecido/malha principal
-      const stale      = isFabric ? isMaterialDateStale(dateStr) : false;
-      const staleDaysV = stale ? staleDaysFrom(dateStr) : null;
+    .map(mapFormacaoMaterial);
 
-      return {
-        erpCode:      item.referencia?.codigo   || item.codigo  || null,
-        name:         item.referencia?.descricao || item.descricao || item.nome || 'Material',
-        category:     item.codigoImpressao    || null,
-        isFabric,
-        unit:         item.unidade            || 'un',
-        consumption:  parseFloat(item.quantidade) || 1,
-        unitPrice:    parseFloat(item.custo)  || 0,
-        costPerPiece: parseFloat(item.valor)  || parseFloat(item.custo) * (parseFloat(item.quantidade) || 1) || 0,
-        erpPriceDate: (!dateStr || dateStr.startsWith(DELPHI_NULL_PREFIX)) ? null : new Date(dateStr),
-        isStale:      stale,
-        staleDays:    staleDaysV,
-        raw:          item,
-      };
-    });
+  if (!materials.length) {
+    try {
+      const consumos = await getConsumoProduto(referencia);
+      materials = await enrichMaterialPrices(
+        (Array.isArray(consumos) ? consumos : [consumos])
+          .filter(Boolean)
+          .map(mapConsumoMaterial)
+          .filter((item) => item.erpCode)
+      );
+    } catch (e) {
+      console.warn(`[ERP] Fallback de consumo para ${referencia} falhou:`, e.message);
+    }
+  }
 
   // ─── Custos de processo (abreviado = "M") ──────────────────────────────────
   const fabricationItems = itens

@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { productsAPI } from '../../../services/api';
+import { summarizeCustomizations } from '../../../utils/customizations';
 
 const FABRIC_FREIGHT_RATE = 0.03;
 
@@ -27,8 +28,9 @@ const calcPricing = (data) => {
   const totalFabrication = (data.fabricationItems || [])
     .reduce((sum, f) => sum + (f.unitCost ?? 0) * (f.quantity ?? 1), 0);
 
-  const embroideryCost = data.embroideryCost || 0;
-  const printCost      = data.printCostPerPiece || data.printCost || 0;
+  const customization = summarizeCustomizations(data);
+  const embroideryCost = customization.embroideryTotal;
+  const printCost      = customization.printTotal;
   const subtotal       = totalMaterial + fabricFreight + totalFabrication + embroideryCost + printCost;
   const urgency        = data.urgent ? subtotal * 0.15 : 0;
   const costPerPiece   = subtotal + urgency;
@@ -60,7 +62,7 @@ const calcPricing = (data) => {
 export default function Step4Pricing({ data, update, onNext, onBack }) {
   const pricing = useMemo(() => calcPricing(data), [
     data.materials, data.fabricationItems,
-    data.embroideryCost, data.printCostPerPiece, data.printCost,
+    data.embroideryItems, data.printItems, data.embroideryCost, data.printCostPerPiece, data.printCost,
     data.urgent, data.markup, data.markupCoeficiente, data.discount, data.quantity,
   ]);
 
