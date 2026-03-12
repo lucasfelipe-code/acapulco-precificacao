@@ -26,6 +26,9 @@ import {
   diagnosticarCatalogoMateriais,
   getMateriaisFromBOMs,
   searchMateriaisFromBOMs,
+  searchLocalMaterialCatalog,
+  syncErpMaterialCatalog,
+  getLocalMaterialGroups,
 } from '../services/erpService.js';
 
 const router = Router();
@@ -128,28 +131,23 @@ function mapBomBase(m, similarity = null) {
 }
 
 async function getSearchCatalog() {
+  const local = await searchLocalMaterialCatalog('', 0).catch(() => []);
+  if (local.length) return local;
   const [materialCatalog, bomCatalog] = await Promise.all([
     getMateriaisCatalog().catch(() => []),
     getMateriaisFromBOMs(false).catch(() => []),
   ]);
 
   const dedup = new Map();
-
   materialCatalog.forEach((item) => {
     if (!item?.codigo) return;
-    dedup.set(item.codigo, { source: 'material', item });
+    dedup.set(item.codigo, mapBase(item));
   });
-
   bomCatalog.forEach((item) => {
-    if (!item?.codigo) return;
-    if (!dedup.has(item.codigo)) {
-      dedup.set(item.codigo, { source: 'bom', item });
-    }
+    if (!item?.codigo || dedup.has(item.codigo)) return;
+    dedup.set(item.codigo, mapBomBase(item));
   });
-
-  return Array.from(dedup.values()).map(({ source, item }) => (
-    source === 'bom' ? mapBomBase(item) : mapBase(item)
-  ));
+  return Array.from(dedup.values());
 }
 
 /**
@@ -203,13 +201,7 @@ router.get('/search', async (req, res, next) => {
     const q = (req.query.q || '').trim().toLowerCase();
     if (q.length < 2) return res.json([]);
 
-    const catalog = await getMateriaisCatalog();
-    const directMatches = catalog
-      .map((item) => ({ ...mapBase(item), _score: scoreMaterial(mapBase(item), q) }))
-      .filter((item) => item._score >= 0)
-      .sort((a, b) => b._score - a._score || a.descricao.localeCompare(b.descricao, 'pt-BR'))
-      .slice(0, 20)
-      .map(({ _score, ...item }) => item);
+    const directMatches = await searchLocalMaterialCatalog(q, 20);
 
     if (directMatches.length > 0) {
       const enriched = await enrichWithPrices(directMatches);
@@ -418,8 +410,17 @@ router.get('/erp-diagnostic', async (req, res, next) => {
 router.post('/catalog/refresh', async (req, res, next) => {
   try {
     clearMateriaisCatalogCache();
-    const catalog = await getMateriaisCatalog();
-    res.json({ ok: true, count: catalog.length });
+    const result = await syncErpMaterialCatalog(true);
+    res.json({ ok: true, count: result.count, groups: result.groups });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/groups', async (_req, res, next) => {
+  try {
+    const groups = await getLocalMaterialGroups();
+    res.json({ groups });
   } catch (err) {
     next(err);
   }

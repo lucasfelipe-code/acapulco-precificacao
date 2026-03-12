@@ -359,3 +359,27 @@ model ErpCache {
 
   @@map("erp_cache")
 }
+
+model ErpMaterialCatalog {
+  codigo                String   @id
+  descricao             String
+  descricaoNormalizada  String
+  grupoCodigo           String?
+  grupoDescricao        String?
+  subgrupoCodigo        String?
+  subgrupoDescricao     String?
+  unidade               String?
+  ativo                 Boolean  @default(true)
+  tipoInterno           String?  // FABRIC | TRIM | PACKAGING | OTHER
+  aplicaFreshnessGuard  Boolean  @default(false)
+  aplicaFreteTecido     Boolean  @default(false)
+  rawData               String?
+  syncedAt              DateTime @default(now())
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([grupoCodigo])
+  @@index([grupoDescricao])
+  @@index([descricaoNormalizada])
+  @@map("erp_material_catalog")
+}

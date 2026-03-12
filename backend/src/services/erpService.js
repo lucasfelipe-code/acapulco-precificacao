@@ -31,6 +31,9 @@ const ERP_BASE_URL = process.env.ERP_BASE_URL || 'https://erp.lourencosolucoesen
 const ERP_LOGIN    = process.env.ERP_LOGIN    || '';
 const ERP_SENHA    = process.env.ERP_SENHA    || '';
 
+const FABRIC_GROUP_CODES = new Set((process.env.ERP_FABRIC_GROUP_CODES || '15,16').split(',').map((v) => v.trim()).filter(Boolean));
+const PACKAGING_GROUP_CODES = new Set((process.env.ERP_PACKAGING_GROUP_CODES || '').split(',').map((v) => v.trim()).filter(Boolean));
+
 // ─── Token cache ───────────────────────────────────────────────────────────────
 let _token = null;
 let _tokenExpiry = null;
@@ -289,6 +292,140 @@ export async function getMateriaisCatalog() {
   _materialCatalog = all;
   _catalogExpiry   = Date.now() + CATALOG_TTL_MS;
   return _materialCatalog;
+}
+
+export async function syncErpMaterialCatalog(forceRefresh = false) {
+  const materials = forceRefresh ? (() => { clearMateriaisCatalogCache(); return getMateriaisCatalog(); })() : getMateriaisCatalog();
+  const catalog = await materials;
+
+  if (!catalog.length) return { count: 0, groups: [] };
+
+  const rows = catalog.map((item) => {
+    const grupoCodigo = item.grupo?.codigo != null ? String(item.grupo.codigo) : null;
+    const grupoDescricao = item.grupo?.descricao || null;
+    const subgrupoCodigo = item.subgrupo?.codigo != null ? String(item.subgrupo.codigo) : null;
+    const subgrupoDescricao = item.subgrupo?.descricao || null;
+    const classification = classifyMaterialGroup({
+      grupoCodigo,
+      grupoDescricao,
+    });
+
+    return {
+      codigo: String(item.codigo),
+      descricao: item.descricao || '',
+      descricaoNormalizada: normalizeErpText(item.descricao || ''),
+      grupoCodigo,
+      grupoDescricao,
+      subgrupoCodigo,
+      subgrupoDescricao,
+      unidade: item.unidade || null,
+      ativo: item.ativo !== false,
+      tipoInterno: classification.tipoInterno,
+      aplicaFreshnessGuard: classification.aplicaFreshnessGuard,
+      aplicaFreteTecido: classification.aplicaFreteTecido,
+      rawData: JSON.stringify(item),
+      syncedAt: new Date(),
+    };
+  });
+
+  for (let i = 0; i < rows.length; i += 500) {
+    const batch = rows.slice(i, i + 500);
+    await prisma.$transaction(
+      batch.map((row) => prisma.erpMaterialCatalog.upsert({
+        where: { codigo: row.codigo },
+        create: row,
+        update: row,
+      }))
+    );
+  }
+
+  const groups = await prisma.erpMaterialCatalog.groupBy({
+    by: ['grupoCodigo', 'grupoDescricao', 'tipoInterno'],
+    _count: { codigo: true },
+    orderBy: { grupoDescricao: 'asc' },
+  });
+
+  return {
+    count: rows.length,
+    groups: groups.map((group) => ({
+      grupoCodigo: group.grupoCodigo,
+      grupoDescricao: group.grupoDescricao,
+      tipoInterno: group.tipoInterno,
+      total: group._count.codigo,
+    })),
+  };
+}
+
+export async function ensureLocalMaterialCatalog() {
+  const total = await prisma.erpMaterialCatalog.count();
+  if (total > 0) return total;
+  const result = await syncErpMaterialCatalog(false);
+  return result.count;
+}
+
+export async function searchLocalMaterialCatalog(query, limit = 20) {
+  const term = normalizeErpText(query);
+  if (term.length < 2) return [];
+
+  await ensureLocalMaterialCatalog();
+
+  const items = await prisma.erpMaterialCatalog.findMany({
+    where: {
+      OR: [
+        { codigo: { contains: query, mode: 'insensitive' } },
+        { descricaoNormalizada: { contains: term } },
+        { grupoDescricao: { contains: query, mode: 'insensitive' } },
+      ],
+    },
+    take: Math.max(limit * 3, 50),
+    orderBy: [
+      { aplicaFreshnessGuard: 'desc' },
+      { descricao: 'asc' },
+    ],
+  });
+
+  return items
+    .map((item) => {
+      const description = normalizeErpText(item.descricao);
+      const group = normalizeErpText(item.grupoDescricao || '');
+      let score = 0;
+      if (item.codigo?.toUpperCase().includes(term)) score += 500;
+      if (description.startsWith(term)) score += 400;
+      else if (description.includes(term)) score += 300;
+      if (group.includes(term)) score += 200;
+      return {
+        codigo: item.codigo,
+        descricao: item.descricao,
+        grupo: item.grupoDescricao,
+        grupoCodigo: item.grupoCodigo,
+        unidade: item.unidade || 'un',
+        isFabric: item.aplicaFreshnessGuard,
+        tipoInterno: item.tipoInterno,
+        _score: score,
+      };
+    })
+    .filter((item) => item._score > 0)
+    .sort((a, b) => b._score - a._score || a.descricao.localeCompare(b.descricao, 'pt-BR'))
+    .slice(0, limit)
+    .map(({ _score, ...item }) => item);
+}
+
+export async function getLocalMaterialGroups() {
+  await ensureLocalMaterialCatalog();
+  const groups = await prisma.erpMaterialCatalog.groupBy({
+    by: ['grupoCodigo', 'grupoDescricao', 'tipoInterno', 'aplicaFreshnessGuard', 'aplicaFreteTecido'],
+    _count: { codigo: true },
+    orderBy: [{ grupoDescricao: 'asc' }],
+  });
+
+  return groups.map((group) => ({
+    grupoCodigo: group.grupoCodigo,
+    grupoDescricao: group.grupoDescricao,
+    tipoInterno: group.tipoInterno,
+    aplicaFreshnessGuard: group.aplicaFreshnessGuard,
+    aplicaFreteTecido: group.aplicaFreteTecido,
+    total: group._count.codigo,
+  }));
 }
 
 /**
