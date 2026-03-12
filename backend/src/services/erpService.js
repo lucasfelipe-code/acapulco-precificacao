@@ -229,6 +229,21 @@ export async function getTabelaPreco(codigoTabela) {
 }
 
 /**
+ * Lista todos os markups cadastrados no ERP.
+ * GET /markup (sem código) — pode retornar array ou falhar em algumas versões do Sisplan.
+ * Retorna array vazio em caso de erro (não crítico).
+ */
+export async function getMarkupsList() {
+  try {
+    const data = await erpGet('/markup');
+    return Array.isArray(data) ? data : [];
+  } catch (e) {
+    console.warn('[ERP] getMarkupsList failed (endpoint pode não suportar listagem):', e.message);
+    return [];
+  }
+}
+
+/**
  * Preço de um produto em uma tabela específica.
  * GET /preco/{tabela}/{codigo}
  */

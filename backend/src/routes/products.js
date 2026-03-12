@@ -12,6 +12,8 @@ import {
   getCombinacaoProduto,
   getProdutosList,
   getProdutoByCodigo2,
+  getMarkupsList,
+  getMarkup,
 } from '../services/erpService.js';
 
 const router = Router();
@@ -147,12 +149,79 @@ router.get('/:referencia', async (req, res, next) => {
 });
 
 /**
- * GET /api/products/:referencia/formacao-preco
- * Formação de preço calculada pelo próprio ERP.
+ * GET /api/products/:referencia/markups
+ * Lista todas as opções de markup disponíveis no ERP.
+ * Tenta GET /markup (lista) — se falhar, retorna apenas o markup padrão do produto.
+ */
+router.get('/:referencia/markups', async (req, res, next) => {
+  try {
+    const { referencia } = req.params;
+
+    const [allMarkupsResult, productResult] = await Promise.allSettled([
+      getMarkupsList(),
+      getDadosProdutoParaOrcamento(referencia),
+    ]);
+
+    const allMarkups    = allMarkupsResult.status === 'fulfilled' ? allMarkupsResult.value : [];
+    const defaultMarkup = productResult.status === 'fulfilled'   ? productResult.value.markup : null;
+
+    // Helper: calcula coeficiente divisório a partir dos índices
+    const calcCoef = (indices = []) => {
+      const soma = indices.reduce((s, i) => s + (parseFloat(i.indiceNacional) || 0), 0);
+      return soma > 0 && soma < 100 ? parseFloat((1 / (1 - soma / 100)).toFixed(6)) : null;
+    };
+
+    let options = [];
+
+    if (allMarkups.length > 0) {
+      // ERP retornou lista — enriquecer com coeficiente calculado
+      options = allMarkups.map(mk => {
+        const indices     = Array.isArray(mk.indices) ? mk.indices : [];
+        const somaIndices = parseFloat(indices.reduce((s, i) => s + (parseFloat(i.indiceNacional) || 0), 0).toFixed(4));
+        return {
+          codigo:      mk.codigo,
+          descricao:   mk.descricao,
+          indices,
+          somaIndices,
+          coeficiente: calcCoef(indices),
+          isDefault:   defaultMarkup?.codigo === mk.codigo,
+        };
+      });
+    } else if (defaultMarkup) {
+      // Fallback: só o markup padrão do produto
+      options = [{ ...defaultMarkup, isDefault: true }];
+    }
+
+    // Busca detalhes de markups sem índices (lista pode vir sem índices)
+    const needsDetail = options.filter(o => o.indices.length === 0 && o.codigo);
+    if (needsDetail.length > 0) {
+      await Promise.allSettled(
+        needsDetail.map(async (o) => {
+          try {
+            const detail = await getMarkup(o.codigo);
+            const indices = Array.isArray(detail.indices) ? detail.indices : [];
+            o.indices     = indices;
+            o.somaIndices = parseFloat(indices.reduce((s, i) => s + (parseFloat(i.indiceNacional) || 0), 0).toFixed(4));
+            o.coeficiente = calcCoef(indices);
+          } catch { /* ignora falha individual */ }
+        })
+      );
+    }
+
+    res.json({ options, defaultCodigo: defaultMarkup?.codigo || null });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/products/:referencia/formacao-preco?markup=CODIGO
+ * Formação de preço calculada pelo próprio ERP, opcionalmente com markup específico.
  */
 router.get('/:referencia/formacao-preco', async (req, res, next) => {
   try {
-    const data = await getFormacaoPreco(req.params.referencia);
+    const { markup, ordem } = req.query;
+    const data = await getFormacaoPreco(req.params.referencia, markup || null, ordem || null);
     res.json(data);
   } catch (err) {
     next(err);

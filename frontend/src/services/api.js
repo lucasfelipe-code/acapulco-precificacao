@@ -39,8 +39,9 @@ export const productsAPI = {
   list:             ()                          => api.get('/products'),
   getByReference:   (ref, forceRefresh = false) =>
     api.get(`/products/${encodeURIComponent(ref)}${forceRefresh ? '?refresh=true' : ''}`),
-  getFormacaoPreco: (ref) =>
-    api.get(`/products/${encodeURIComponent(ref)}/formacao-preco`),
+  getMarkups:       (ref)                       => api.get(`/products/${encodeURIComponent(ref)}/markups`),
+  getFormacaoPreco: (ref, markup = null)        =>
+    api.get(`/products/${encodeURIComponent(ref)}/formacao-preco${markup ? `?markup=${encodeURIComponent(markup)}` : ''}`),
   erpStatus:        () => api.get('/products/erp/status'),
 };
 

@@ -318,7 +318,19 @@ function ProductSection({ data, update }) {
     setSearching(true);
     setErpError(null);
     try {
-      const { data: res } = await productsAPI.getByReference(code, forceRefresh);
+      const [productRes, markupsRes] = await Promise.allSettled([
+        productsAPI.getByReference(code, forceRefresh),
+        productsAPI.getMarkups(code),
+      ]);
+
+      if (productRes.status === 'rejected') throw productRes.reason;
+
+      const res     = productRes.value.data;
+      const markups = markupsRes.status === 'fulfilled' ? (markupsRes.value.data?.options || []) : [];
+
+      // Markup padrão: prefere o selecionado via getMarkups (pode ter mais opções)
+      const defaultMarkup = markups.find(m => m.isDefault) || res.markup;
+
       setSelectedSizes([]);
       update({
         reference:         code,
@@ -327,9 +339,10 @@ function ProductSection({ data, update }) {
         erpProductData:    res.product,
         materials:         res.materials        || [],
         fabricationItems:  res.fabricationItems || [],
-        erpMarkup:         res.markup,
-        markupCoeficiente: res.markup?.coeficiente  ?? null,
-        markupSource:      res.markup ? 'ERP' : 'MANUAL',
+        erpMarkup:         defaultMarkup,
+        erpMarkupOptions:  markups,
+        markupCoeficiente: defaultMarkup?.coeficiente ?? null,
+        markupSource:      defaultMarkup ? 'ERP' : 'MANUAL',
         erpSalePrice:      res.erpSalePrice,
         hasStale:          res.hasStale,
         sizes:             [],

@@ -38,6 +38,7 @@ export default function NewQuotePage() {
     sizes:          [],
     erpProductData: null,
     erpMarkup:         null,
+    erpMarkupOptions:  [],
     markupCoeficiente: null,
     markupSource:      'MANUAL',
     erpSalePrice:      null,
