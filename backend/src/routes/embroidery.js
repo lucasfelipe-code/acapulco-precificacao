@@ -3,6 +3,7 @@ import multer from 'multer';
 import OpenAI from 'openai';
 import prisma from '../config/database.js';
 import { requireAuth } from '../middleware/auth.js';
+import { estimateEmbroideryPoints, resolveEmbroideryDimensions } from '../services/embroideryAnalysis.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -15,26 +16,33 @@ const EMBROIDERY_EXPERT_PROMPT = `Voce e um especialista em bordado industrial c
 
 Ao analisar uma imagem de arte para bordado, voce deve:
 
-1. Estimar a contagem de pontos.
-2. Classificar a complexidade.
-3. Sugerir largura e altura provaveis da arte.
-4. Identificar quantidade de cores e tipos de ponto.
+1. Classificar a complexidade tecnica do programa.
+2. Sugerir largura e altura finais provaveis da arte.
+3. Identificar quantidade de cores, cobertura de preenchimento e nivel de detalhe fino.
+4. Indicar se existe texto fino ou elementos que aumentem a densidade do programa.
 5. Retornar apenas um JSON valido neste formato:
 {
-  "estimatedPointsMin": numero,
-  "estimatedPointsMax": numero,
-  "estimatedPoints": numero,
   "widthCmEstimate": numero,
   "heightCmEstimate": numero,
   "colorCount": numero,
   "complexity": "SIMPLE" | "MEDIUM" | "COMPLEX" | "VERY_COMPLEX",
+  "programComplexity": "SIMPLE" | "MEDIUM" | "COMPLEX" | "VERY_COMPLEX",
+  "coveragePercent": numero,
+  "detailLevel": numero,
+  "hasText": true,
   "stitchTypes": ["cetim", "preenchimento"],
   "technicalObservations": "texto",
   "confidenceLevel": 0.0,
   "referenceExample": "texto"
 }
 
-Se o usuario informar dimensoes alvo da arte, use essas dimensoes como referencia principal para a estimativa. Seja conservador nas estimativas.`;
+Regras obrigatorias:
+- coveragePercent deve ficar entre 0.35 e 1.15
+- detailLevel deve ficar entre 0.20 e 1.00
+- confidenceLevel deve ficar entre 0.00 e 1.00
+- Se o usuario informar largura e/ou altura final, use isso como referencia principal
+- Se vier apenas uma dimensao, estime a outra respeitando a proporcao visual da arte
+- Nao escreva explicacoes fora do JSON.`;
 
 async function findSetupCost(candidates = []) {
   const cost = await prisma.manufacturingCost.findFirst({
@@ -84,9 +92,17 @@ router.post('/analyze', requireAuth, upload.single('image'), async (req, res, ne
 
     const widthHint = parseFloat(req.body.widthCm);
     const heightHint = parseFloat(req.body.heightCm);
+    const imageAspectRatio = parseFloat(req.body.imageAspectRatio);
     const sizeContext = widthHint > 0 && heightHint > 0
       ? `Considere como dimensao final aproximada ${widthHint} cm de largura por ${heightHint} cm de altura.`
-      : 'Se a imagem nao informar dimensao final, estime um tamanho usual para uniforme.';
+      : widthHint > 0
+        ? `Considere como largura final ${widthHint} cm. Estime a altura final mantendo a proporcao visual da arte.`
+        : heightHint > 0
+          ? `Considere como altura final ${heightHint} cm. Estime a largura final mantendo a proporcao visual da arte.`
+          : 'Se a imagem nao informar dimensao final, estime um tamanho usual para uniforme.';
+    const ratioContext = imageAspectRatio > 0
+      ? `A proporcao visual da arte e aproximadamente ${imageAspectRatio.toFixed(4)} (largura/altura).`
+      : '';
 
     const response = await openai.chat.completions.create({
       model: EMBROIDERY_AI_MODEL,
@@ -101,11 +117,12 @@ router.post('/analyze', requireAuth, upload.single('image'), async (req, res, ne
             },
             {
               type: 'text',
-              text: `Analise esta arte para bordado industrial. ${sizeContext} Retorne apenas o JSON da analise tecnica.`,
+              text: `Analise esta arte para bordado industrial. ${sizeContext} ${ratioContext} Retorne apenas o JSON da analise tecnica.`,
             },
           ],
         },
       ],
+      response_format: { type: 'json_object' },
       max_tokens: 800,
       temperature: 0.2,
     });
@@ -117,24 +134,53 @@ router.post('/analyze', requireAuth, upload.single('image'), async (req, res, ne
     }
 
     const analysis = JSON.parse(jsonMatch[0]);
+    const dimensions = resolveEmbroideryDimensions({
+      widthHint,
+      heightHint,
+      aspectRatio: imageAspectRatio,
+      aiWidth: analysis.widthCmEstimate,
+      aiHeight: analysis.heightCmEstimate,
+    });
+    const technicalEstimate = estimateEmbroideryPoints({
+      widthCm: dimensions.widthCm,
+      heightCm: dimensions.heightCm,
+      complexity: analysis.programComplexity || analysis.complexity,
+      colorCount: analysis.colorCount,
+      coveragePercent: analysis.coveragePercent,
+      detailLevel: analysis.detailLevel,
+      hasText: analysis.hasText,
+      confidenceLevel: analysis.confidenceLevel,
+    });
     const pricePerK = parseFloat(req.body.pricePerK) || PRICE_PER_K;
-    const estimatedCost = (analysis.estimatedPoints / 1000) * pricePerK;
-    const estimatedCostMin = (analysis.estimatedPointsMin / 1000) * pricePerK;
-    const estimatedCostMax = (analysis.estimatedPointsMax / 1000) * pricePerK;
+    const estimatedCost = (technicalEstimate.estimatedPoints / 1000) * pricePerK;
+    const estimatedCostMin = (technicalEstimate.estimatedPointsMin / 1000) * pricePerK;
+    const estimatedCostMax = (technicalEstimate.estimatedPointsMax / 1000) * pricePerK;
 
     const similar = await findSimilarEmbroideries({
-      estimatedPoints: analysis.estimatedPoints,
+      estimatedPoints: technicalEstimate.estimatedPoints,
       colorCount: analysis.colorCount,
-      complexity: analysis.complexity,
+      complexity: analysis.programComplexity || analysis.complexity,
     });
 
     res.json({
       analysis: {
         ...analysis,
+        complexity: analysis.programComplexity || analysis.complexity,
+        programComplexity: analysis.programComplexity || analysis.complexity,
+        widthCmEstimate: dimensions.widthCm,
+        heightCmEstimate: dimensions.heightCm,
+        aspectRatio: dimensions.aspectRatio,
+        areaCm2: technicalEstimate.areaCm2,
+        estimatedPoints: technicalEstimate.estimatedPoints,
+        estimatedPointsMin: technicalEstimate.estimatedPointsMin,
+        estimatedPointsMax: technicalEstimate.estimatedPointsMax,
+        pointRange: technicalEstimate.pointRange,
+        densityPerCm2: technicalEstimate.densityPerCm2,
         estimatedCost,
         estimatedCostMin,
         estimatedCostMax,
         pricePerK,
+        analysisMethod: 'HYBRID_TECHNICAL',
       },
       similar,
     });

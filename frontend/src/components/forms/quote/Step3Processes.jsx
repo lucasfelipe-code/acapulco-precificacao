@@ -74,6 +74,9 @@ async function buildCompressedImage(file, maxDimension) {
   return {
     blob,
     previewUrl: URL.createObjectURL(blob),
+    sourceWidth: image.width,
+    sourceHeight: image.height,
+    aspectRatio: image.width > 0 && image.height > 0 ? image.width / image.height : 0,
   };
 }
 
@@ -204,6 +207,7 @@ export default function Step3Processes({ data, update, onNext, onBack }) {
       const formData = new FormData();
       formData.append('image', analysisBlob, file.name.replace(/\.[^.]+$/, '') + '.jpg');
       formData.append('pricePerK', item?.pricePerK || 0.9);
+      if (analysisAsset.aspectRatio > 0) formData.append('imageAspectRatio', analysisAsset.aspectRatio);
       if (toNumber(item?.widthCm, 0) > 0) formData.append('widthCm', item.widthCm);
       if (toNumber(item?.heightCm, 0) > 0) formData.append('heightCm', item.heightCm);
 
@@ -214,11 +218,18 @@ export default function Step3Processes({ data, update, onNext, onBack }) {
         name: item?.name || analysis.referenceExample || '',
         widthCm: toNumber(item?.widthCm, 0) > 0 ? item.widthCm : toNumber(analysis.widthCmEstimate, 0),
         heightCm: toNumber(item?.heightCm, 0) > 0 ? item.heightCm : toNumber(analysis.heightCmEstimate, 0),
+        aspectRatio: toNumber(analysis.aspectRatio, analysisAsset.aspectRatio),
         points: toNumber(analysis.estimatedPoints, 0),
+        estimatedPointsMin: toNumber(analysis.estimatedPointsMin, 0),
+        estimatedPointsMax: toNumber(analysis.estimatedPointsMax, 0),
+        densityPerCm2: toNumber(analysis.densityPerCm2, 0),
         colorCount: toNumber(analysis.colorCount, 0),
         complexity: analysis.complexity,
+        programComplexity: analysis.programComplexity || analysis.complexity,
         stitchTypes: analysis.stitchTypes || [],
         technicalObservations: analysis.technicalObservations || '',
+        analysisMethod: analysis.analysisMethod || 'HYBRID_TECHNICAL',
+        confidenceLevel: toNumber(analysis.confidenceLevel, 0),
         pricePerK: toNumber(analysis.pricePerK, item?.pricePerK || 0.9),
         applicationCost: toNumber(analysis.estimatedCost, 0),
         status: 'ESTIMATED',
@@ -332,8 +343,15 @@ export default function Step3Processes({ data, update, onNext, onBack }) {
                               <div className="flex items-center gap-2">
                                 <CheckCircle2 className="w-4 h-4 text-green-600" />
                                 <span>{item.points.toLocaleString('pt-BR')} pts</span>
-                                <ComplexityBadge level={item.complexity} />
+                                <ComplexityBadge level={item.programComplexity || item.complexity} />
                               </div>
+                              {(item.estimatedPointsMin > 0 || item.estimatedPointsMax > 0) && (
+                                <p>
+                                  Faixa tecnica: {toNumber(item.estimatedPointsMin, 0).toLocaleString('pt-BR')} a {toNumber(item.estimatedPointsMax, 0).toLocaleString('pt-BR')} pts
+                                </p>
+                              )}
+                              {item.densityPerCm2 > 0 && <p>Densidade estimada: {toNumber(item.densityPerCm2, 0).toFixed(0)} pts/cm2</p>}
+                              {item.confidenceLevel > 0 && <p>Confianca da IA: {Math.round(toNumber(item.confidenceLevel, 0) * 100)}%</p>}
                               {item.technicalObservations && <p>{item.technicalObservations}</p>}
                             </div>
                           )}
@@ -355,6 +373,7 @@ export default function Step3Processes({ data, update, onNext, onBack }) {
                           points: toNumber(job.confirmedPoints ?? job.estimatedPoints, 0),
                           colorCount: toNumber(job.colorCount, 0),
                           complexity: job.complexity,
+                          programComplexity: job.complexity,
                           applicationCost: toNumber(job.applicationCost, 0),
                           pricePerK: toNumber(job.pricePerK, 0.9),
                           jobId: job.id,
